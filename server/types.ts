@@ -33,7 +33,10 @@ export interface SearchConfig {
   mmr: { enabled: boolean; lambda: number };
   temporalDecay: { enabled: boolean; halfLifeDays: number };
   reranking: { enabled: boolean; candidateCount: number };
-  queryExpansion: { enabled: boolean };
+  queryExpansion: { 
+    enabled: boolean;
+    strongSignalThreshold?: number;  // BM25 score above which we skip expansion
+  };
 }
 
 export interface ChunkingConfig {

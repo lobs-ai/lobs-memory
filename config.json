@@ -38,7 +38,8 @@
       "candidateCount": 20
     },
     "queryExpansion": {
-      "enabled": false
+      "enabled": true,
+      "strongSignalThreshold": 0.8
     }
   },
   "chunking": {
