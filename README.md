@@ -50,11 +50,11 @@ OpenClaw's builtin memory search is fast but basic (BM25 + cosine similarity). Q
 
 | Role | Model | Size | Source |
 |------|-------|------|--------|
-| Embedding | embeddinggemma-300M-Q8_0 | 328MB | GGUF (node-llama-cpp) |
-| Reranker | qwen3-reranker-0.6b-q8_0 | 639MB | GGUF (node-llama-cpp) |
-| Query Expansion | qmd-query-expansion-1.7B-q4_k_m | 1.2GB | GGUF (node-llama-cpp) |
+| Embedding | nomic-embed-text-v1.5 | 768-dim | LM Studio API (localhost:1234) |
+| Query Expansion | qwen3.5-9b | - | LM Studio API (localhost:1234) |
+| Reranker | qwen3-reranker-0.6b-q8_0 | 639MB | GGUF (node-llama-cpp, in-process) |
 
-Upgrade path: swap embedding model for nomic-embed-text via Ollama for better quality.
+LM Studio handles embeddings + query expansion (already running). Only the reranker loads in-process (cross-encoders aren't supported by OpenAI-compatible APIs).
 
 ## API
 
@@ -66,13 +66,20 @@ Upgrade path: swap embedding model for nomic-embed-text via Ollama for better qu
 | `/status` | GET | Detailed index stats |
 | `/collections` | POST | Add/remove watched directories |
 
+## Prerequisites
+
+- [LM Studio](https://lmstudio.ai) running on localhost:1234 with:
+  - `nomic-embed-text-v1.5` (embedding model)
+  - `qwen3.5-9b` or similar chat model (query expansion)
+- Reranker GGUF at `~/.cache/qmd/models/hf_ggml-org_qwen3-reranker-0.6b-q8_0.gguf`
+
 ## Setup
 
 ```bash
 # Install deps
 bun install
 
-# Start server (models auto-load)
+# Start server (reranker model auto-loads, LM Studio handles the rest)
 bun run server/index.ts
 
 # Or as a daemon

@@ -19,11 +19,12 @@ Persistent HTTP server that keeps all models loaded in memory. OpenClaw plugin r
 - QMD already uses Bun + node-llama-cpp, proven combo on this machine
 - Alternative considered: Node.js (heavier), Python (FastAPI + sentence-transformers — more deps)
 
-### Models: GGUF via node-llama-cpp (in-process)
-- All three models loaded once at startup, stay in memory
-- No external dependency (no Ollama needed initially)
-- Uses the same GGUF models QMD already downloaded
-- Upgrade path: Ollama API for embeddings when better models are available
+### Models: LM Studio + node-llama-cpp hybrid
+- **Embeddings**: LM Studio API (localhost:1234) — nomic-embed-text-v1.5 already loaded, 23ms per call, 768-dim
+- **Query expansion**: LM Studio API — qwen3.5-9b chat model (already loaded, just text generation)
+- **Reranker**: node-llama-cpp in-process — qwen3-reranker-0.6b GGUF (cross-encoders aren't supported by LM Studio's OpenAI-compatible API)
+- This means only one GGUF model loaded in the server process (~639MB), everything else hits LM Studio
+- LM Studio is already running and keeps models hot — zero additional overhead
 
 ### Storage: SQLite + FTS5 + sqlite-vec
 - Single file, portable, proven
