@@ -34,6 +34,8 @@ export function initDb(dbPath?: string): Database {
   db.exec("PRAGMA journal_mode = WAL");
   db.exec("PRAGMA synchronous = NORMAL");
 
+
+
   createTables(db);
   return db;
 }
@@ -46,6 +48,9 @@ export function getDb(): Database {
 }
 
 function createTables(db: Database): void {
+  // Enable foreign keys
+  db.exec("PRAGMA foreign_keys = ON;");
+
   // Documents table
   db.exec(`
     CREATE TABLE IF NOT EXISTS documents (
@@ -55,9 +60,9 @@ function createTables(db: Database): void {
       mtime REAL NOT NULL,
       hash TEXT NOT NULL,
       updated_at TEXT DEFAULT (datetime('now'))
-    );
-    CREATE INDEX IF NOT EXISTS idx_documents_collection ON documents(collection);
+    )
   `);
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_documents_collection ON documents(collection)`);
 
   // Chunks table
   db.exec(`
@@ -68,9 +73,9 @@ function createTables(db: Database): void {
       start_line INTEGER NOT NULL,
       end_line INTEGER NOT NULL,
       token_count INTEGER NOT NULL
-    );
-    CREATE INDEX IF NOT EXISTS idx_chunks_doc_id ON chunks(doc_id);
+    )
   `);
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_chunks_doc_id ON chunks(doc_id)`);
 
   // FTS5 for BM25 search
   db.exec(`
@@ -102,17 +107,14 @@ function createTables(db: Database): void {
     END;
   `);
 
-  // sqlite-vec for vector search (optional, graceful fallback)
-  try {
-    db.exec(`
-      CREATE VIRTUAL TABLE IF NOT EXISTS chunks_vec USING vec0(
-        chunk_id INTEGER PRIMARY KEY,
-        embedding FLOAT[768]
-      );
-    `);
-  } catch (err) {
-    console.warn("sqlite-vec not available, will use in-memory cosine similarity fallback");
-  }
+  // Embeddings stored in regular table, cosine similarity computed in JS
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS chunk_embeddings (
+      chunk_id INTEGER PRIMARY KEY,
+      embedding BLOB NOT NULL,
+      FOREIGN KEY (chunk_id) REFERENCES chunks(id) ON DELETE CASCADE
+    );
+  `);
 
   // Embedding cache
   db.exec(`
@@ -167,7 +169,10 @@ export function insertChunks(chunks: Chunk[]): void {
 }
 
 export function deleteChunks(docId: number): void {
+  // Delete embeddings for these chunks first
+  db!.prepare("DELETE FROM chunk_embeddings WHERE chunk_id IN (SELECT id FROM chunks WHERE doc_id = ?)").run(docId);
   db!.prepare("DELETE FROM chunks WHERE doc_id = ?").run(docId);
+  embeddingCache = null; // Invalidate cache
 }
 
 export function getAllChunks(docId: number): Chunk[] {
@@ -175,30 +180,60 @@ export function getAllChunks(docId: number): Chunk[] {
   return stmt.all(docId) as Chunk[];
 }
 
-// Vector operations
+// Vector operations — in-memory cosine similarity (fast for <10k chunks)
 export function insertEmbeddings(chunkId: number, embedding: Float32Array): void {
-  try {
-    const stmt = db!.prepare("INSERT INTO chunks_vec (chunk_id, embedding) VALUES (?, ?)");
-    stmt.run(chunkId, Buffer.from(embedding.buffer));
-  } catch (err) {
-    // sqlite-vec not available, skip
-  }
+  const stmt = db!.prepare("INSERT OR REPLACE INTO chunk_embeddings (chunk_id, embedding) VALUES (?, ?)");
+  stmt.run(chunkId, Buffer.from(embedding.buffer));
+  // Invalidate cache
+  embeddingCache = null;
 }
 
-export function vectorSearch(embedding: Float32Array, limit: number): Array<{ chunkId: number; distance: number }> {
-  try {
-    const stmt = db!.prepare(`
-      SELECT chunk_id as chunkId, distance
-      FROM chunks_vec
-      WHERE embedding MATCH ?
-      ORDER BY distance
-      LIMIT ?
-    `);
-    return stmt.all(Buffer.from(embedding.buffer), limit) as Array<{ chunkId: number; distance: number }>;
-  } catch (err) {
-    console.warn("Vector search unavailable:", err);
-    return [];
+// Cache all embeddings in memory for fast search
+let embeddingCache: Array<{ chunkId: number; embedding: Float32Array }> | null = null;
+
+function loadEmbeddingCache(): Array<{ chunkId: number; embedding: Float32Array }> {
+  if (embeddingCache) return embeddingCache;
+  const rows = db!.prepare("SELECT chunk_id, embedding FROM chunk_embeddings").all() as Array<{ chunk_id: number; embedding: Buffer }>;
+  embeddingCache = rows.map(r => ({
+    chunkId: r.chunk_id,
+    embedding: new Float32Array(r.embedding.buffer, r.embedding.byteOffset, r.embedding.byteLength / 4),
+  }));
+  console.log(`Loaded ${embeddingCache.length} embeddings into memory cache`);
+  return embeddingCache;
+}
+
+function cosineSimilarity(a: Float32Array, b: Float32Array): number {
+  let dot = 0, normA = 0, normB = 0;
+  for (let i = 0; i < a.length; i++) {
+    dot += a[i] * b[i];
+    normA += a[i] * a[i];
+    normB += b[i] * b[i];
   }
+  const denom = Math.sqrt(normA) * Math.sqrt(normB);
+  return denom === 0 ? 0 : dot / denom;
+}
+
+export function vectorSearch(queryEmbedding: Float32Array, limit: number): Array<{ chunkId: number; distance: number }> {
+  const cache = loadEmbeddingCache();
+  if (cache.length === 0) return [];
+
+  // Compute cosine similarity for all chunks, return top-k
+  const scored = cache.map(entry => ({
+    chunkId: entry.chunkId,
+    similarity: cosineSimilarity(queryEmbedding, entry.embedding),
+  }));
+
+  scored.sort((a, b) => b.similarity - a.similarity);
+
+  // Convert similarity to distance (cosine distance = 1 - similarity, range [0, 2])
+  return scored.slice(0, limit).map(s => ({
+    chunkId: s.chunkId,
+    distance: 1 - s.similarity,
+  }));
+}
+
+export function invalidateEmbeddingCache(): void {
+  embeddingCache = null;
 }
 
 // BM25 search with FTS5 query escaping

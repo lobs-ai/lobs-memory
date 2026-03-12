@@ -10,12 +10,12 @@
   },
   "collections": [
     {
-      "name": "memory",
+      "name": "workspace",
       "path": "~/.openclaw/workspace",
-      "pattern": ["MEMORY.md", "memory/**/*.md"]
+      "pattern": "**/*.md"
     },
     {
-      "name": "shared",
+      "name": "knowledge",
       "path": "~/lobs-shared-memory",
       "pattern": "**/*.md"
     }
@@ -34,11 +34,11 @@
       "halfLifeDays": 30
     },
     "reranking": {
-      "enabled": true,
+      "enabled": false,
       "candidateCount": 20
     },
     "queryExpansion": {
-      "enabled": true
+      "enabled": false
     }
   },
   "chunking": {
