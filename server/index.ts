@@ -1,113 +1,210 @@
 /**
  * lobs-memory server — persistent memory search with reranking + query expansion
  *
- * Keeps embedding, reranker, and query expansion models loaded in memory.
+ * Keeps embedding and reranker models loaded in memory.
  * Serves search requests via HTTP API on localhost.
  */
 
-import type { SearchRequest, SearchResponse, HealthResponse, Config } from "./types.js";
-
-// TODO: implement these modules
-// import { loadConfig } from "./config.js";
-// import { initDb } from "./db.js";
-// import { initEmbedder } from "./embedder.js";
-// import { initReranker } from "./reranker.js";
-// import { initExpander } from "./expander.js";
-// import { createSearchPipeline } from "./search.js";
-// import { startIndexer } from "./indexer.js";
+import { loadConfig } from "./config.js";
+import { initDb, getIndexStats, closeDb } from "./db.js";
+import { initEmbedder, checkEmbedderHealth } from "./embedder.js";
+import { initReranker, isRerankerAvailable, getRerankerStatus, disposeReranker } from "./reranker.js";
+import { initSearch, search } from "./search.js";
+import { startIndexer, stopIndexer, getIndexerStatus, reindexAll } from "./indexer.js";
+import type { SearchRequest, SearchResponse, HealthResponse } from "./types.js";
 
 const startTime = Date.now();
 
-// Placeholder until modules are implemented
-const PORT = Number(process.env.PORT) || 7420;
+// Startup sequence
+async function startup() {
+  console.log("=== lobs-memory server starting ===");
 
-const server = Bun.serve({
-  port: PORT,
-  hostname: "localhost",
+  // 1. Load configuration
+  const config = loadConfig();
+  console.log(`Loaded config: port=${config.port}`);
 
-  async fetch(req: Request): Promise<Response> {
-    const url = new URL(req.url);
-    const path = url.pathname;
+  // 2. Initialize database
+  initDb();
+  console.log("Database initialized");
 
-    // CORS headers for local use
-    const headers = {
-      "Content-Type": "application/json",
-      "Access-Control-Allow-Origin": "http://localhost:*",
-    };
+  // 3. Initialize embedder (LM Studio)
+  initEmbedder(config);
+  const embedderHealth = await checkEmbedderHealth();
+  if (!embedderHealth.available) {
+    console.error(`⚠️  Embedder unavailable: ${embedderHealth.error}`);
+    console.error("Search will not work without embeddings. Is LM Studio running?");
+  } else {
+    console.log("✓ Embedder ready");
+  }
 
-    try {
-      // Health check
-      if (path === "/health" && req.method === "GET") {
-        const health: HealthResponse = {
-          status: "ok",
-          uptime: Math.floor((Date.now() - startTime) / 1000),
-          models: {
-            embedding: { loaded: false, path: "" },  // TODO
-            reranker: { loaded: false, path: "" },    // TODO
-            queryExpansion: { loaded: false, path: "" }, // TODO
-          },
-          index: {
-            documents: 0,  // TODO
-            chunks: 0,     // TODO
-            collections: [],
-            lastUpdate: null,
-          },
-        };
-        return new Response(JSON.stringify(health), { headers });
-      }
+  // 4. Initialize reranker (node-llama-cpp)
+  await initReranker(config);
+  const rerankerStatus = getRerankerStatus();
+  if (!rerankerStatus.available) {
+    console.warn(`⚠️  Reranker unavailable: ${rerankerStatus.error || "not configured"}`);
+    console.warn("Searches will work but without neural reranking");
+  } else {
+    console.log("✓ Reranker ready");
+  }
 
-      // Search
-      if (path === "/search" && req.method === "POST") {
-        const body = (await req.json()) as SearchRequest;
-        if (!body.query) {
-          return new Response(JSON.stringify({ error: "query required" }), {
-            status: 400,
-            headers,
-          });
+  // 5. Initialize search pipeline
+  initSearch(config);
+  console.log("Search pipeline initialized");
+
+  // 6. Start HTTP server first (so it's responsive immediately)
+  const server = Bun.serve({
+    port: config.port,
+    hostname: "localhost",
+
+    async fetch(req: Request): Promise<Response> {
+      const url = new URL(req.url);
+      const path = url.pathname;
+
+      const headers = {
+        "Content-Type": "application/json",
+        "Access-Control-Allow-Origin": "*",
+      };
+
+      try {
+        // Health check
+        if (path === "/health" && req.method === "GET") {
+          const stats = getIndexStats();
+          const embedderHealth = await checkEmbedderHealth();
+          const rerankerStatus = getRerankerStatus();
+
+          const health: HealthResponse = {
+            status: embedderHealth.available ? "ok" : "degraded",
+            uptime: Math.floor((Date.now() - startTime) / 1000),
+            models: {
+              embedding: {
+                loaded: embedderHealth.available,
+                path: config.lmstudio.embeddingModel,
+              },
+              reranker: {
+                loaded: rerankerStatus.available,
+                path: config.models.reranker,
+              },
+              queryExpansion: {
+                loaded: false,
+                path: "not implemented",
+              },
+            },
+            index: stats,
+          };
+
+          return new Response(JSON.stringify(health, null, 2), { headers });
         }
 
-        // TODO: implement actual search pipeline
-        const response: SearchResponse = {
-          results: [],
-          query: body.query,
-          timings: {
-            totalMs: 0,
-            bm25Ms: 0,
-            vectorMs: 0,
-          },
-        };
+        // Search
+        if (path === "/search" && req.method === "POST") {
+          const body = (await req.json()) as SearchRequest;
+          if (!body.query) {
+            return new Response(JSON.stringify({ error: "query required" }), {
+              status: 400,
+              headers,
+            });
+          }
 
-        return new Response(JSON.stringify(response), { headers });
+          const response = await search(body);
+          return new Response(JSON.stringify(response, null, 2), { headers });
+        }
+
+        // Manual re-index trigger
+        if (path === "/index" && req.method === "POST") {
+          reindexAll(); // Don't await, run in background
+          return new Response(
+            JSON.stringify({ ok: true, message: "Re-indexing started in background" }),
+            { headers }
+          );
+        }
+
+        // Status
+        if (path === "/status" && req.method === "GET") {
+          const stats = getIndexStats();
+          const indexerStatus = getIndexerStatus();
+          const embedderHealth = await checkEmbedderHealth();
+
+          const status = {
+            uptime: Math.floor((Date.now() - startTime) / 1000),
+            embedder: embedderHealth,
+            reranker: getRerankerStatus(),
+            indexer: indexerStatus,
+            index: stats,
+            config: {
+              port: config.port,
+              collections: config.collections.map(c => c.name),
+              search: {
+                reranking: config.search.reranking.enabled,
+                mmr: config.search.mmr.enabled,
+                temporalDecay: config.search.temporalDecay.enabled,
+              },
+            },
+          };
+
+          return new Response(JSON.stringify(status, null, 2), { headers });
+        }
+
+        // Collections list
+        if (path === "/collections" && req.method === "GET") {
+          const collections = {
+            collections: config.collections.map(c => ({
+              name: c.name,
+              path: c.path,
+              pattern: c.pattern,
+            })),
+          };
+          return new Response(JSON.stringify(collections, null, 2), { headers });
+        }
+
+        return new Response("Not Found", { status: 404 });
+      } catch (err) {
+        console.error("Request error:", err);
+        return new Response(
+          JSON.stringify({
+            error: err instanceof Error ? err.message : String(err),
+          }),
+          {
+            status: 500,
+            headers,
+          }
+        );
       }
+    },
+  });
 
-      // Index trigger
-      if (path === "/index" && req.method === "POST") {
-        // TODO: trigger re-index
-        return new Response(JSON.stringify({ ok: true, message: "indexing triggered" }), { headers });
-      }
+  console.log(`\n✓ Server ready at http://localhost:${server.port}`);
+  console.log(`  - Embedder: ${embedderHealth.available ? "✓" : "✗"}`);
+  console.log(`  - Reranker: ${rerankerStatus.available ? "✓" : "✗"}`);
 
-      // Status
-      if (path === "/status" && req.method === "GET") {
-        // TODO: detailed status
-        return new Response(JSON.stringify({ status: "ok" }), { headers });
-      }
+  // 7. Start indexer in background (non-blocking)
+  const stats = getIndexStats();
+  console.log(`  - Index: ${stats.documents} docs, ${stats.chunks} chunks (before initial scan)`);
+  console.log(`  - Collections: ${config.collections.map(c => c.name).join(", ")}`);
+  
+  // Run initial indexing in background
+  startIndexer(config).then(() => {
+    const updatedStats = getIndexStats();
+    console.log(`\n✓ Initial indexing complete: ${updatedStats.documents} docs, ${updatedStats.chunks} chunks`);
+  }).catch(err => {
+    console.error("Initial indexing failed:", err);
+  });
+}
 
-      // Collections management
-      if (path === "/collections" && req.method === "POST") {
-        // TODO: add/remove collections
-        return new Response(JSON.stringify({ ok: true }), { headers });
-      }
+// Graceful shutdown
+process.on("SIGTERM", shutdown);
+process.on("SIGINT", shutdown);
 
-      return new Response("Not Found", { status: 404 });
-    } catch (err) {
-      console.error("Request error:", err);
-      return new Response(JSON.stringify({ error: String(err) }), {
-        status: 500,
-        headers,
-      });
-    }
-  },
+async function shutdown() {
+  console.log("\nShutting down...");
+  await stopIndexer();
+  await disposeReranker();
+  closeDb();
+  console.log("Goodbye!");
+  process.exit(0);
+}
+
+// Start the server
+startup().catch(err => {
+  console.error("Startup failed:", err);
+  process.exit(1);
 });
-
-console.log(`lobs-memory server listening on http://localhost:${server.port}`);
-console.log("Models: loading... (TODO)");

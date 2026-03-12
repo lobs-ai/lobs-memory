@@ -1,122 +1,175 @@
 # lobs-memory
 
-Local memory search server + OpenClaw plugin. Persistent vector search with neural reranking and query expansion.
+Persistent memory search server with neural reranking and hybrid search (BM25 + vector).
 
-## Why
+## Features
 
-OpenClaw's builtin memory search is fast but basic (BM25 + cosine similarity). QMD has great features (reranking, query expansion, hybrid search) but cold-starts models on every CLI call (~3s latency). This project keeps models loaded in a persistent server process, giving QMD-quality results with sub-200ms latency.
+- **Hybrid search**: BM25 keyword search + vector semantic search
+- **Neural reranking**: Cross-encoder reranking for higher quality results
+- **Persistent models**: Keeps embedding and reranker models loaded in memory
+- **File watching**: Automatically re-indexes changed files
+- **Embedding cache**: Avoids re-embedding unchanged text
+- **MMR diversity**: Ensures result variety
+- **Temporal decay**: Prioritizes recent files (configurable)
 
-## Architecture
+## Requirements
 
-```
-┌─────────────┐     HTTP      ┌──────────────────────────────┐
-│  OpenClaw   │ ──────────────│  lobs-memory server (Bun)    │
-│  Plugin     │  POST /search │                              │
-│  (memory_   │  POST /index  │  Embedding (GGUF, in-proc)   │
-│   search)   │  GET  /health │  Reranker  (GGUF, in-proc)   │
-└─────────────┘               │  Query Exp (GGUF, in-proc)   │
-                              │  SQLite + FTS5 + sqlite-vec  │
-                              │  File watcher + job queue    │
-                              └──────────────────────────────┘
-```
+- **Bun** runtime
+- **LM Studio** running on localhost:1234 with `text-embedding-nomic-embed-text-v1.5` loaded
+- **Reranker GGUF** (optional): `~/.cache/qmd/models/hf_ggml-org_qwen3-reranker-0.6b-q8_0.gguf`
 
-## Search Pipeline
-
-1. **Query expansion** — LLM generates alternative phrasings (qmd-query-expansion-1.7B)
-2. **BM25 keyword search** — SQLite FTS5 for exact token matching
-3. **Vector similarity** — Cosine similarity on embeddings (embeddinggemma-300M)
-4. **Weighted merge** — Configurable BM25/vector ratio (default 0.3/0.7)
-5. **Neural reranking** — Cross-encoder rescores query-doc pairs (qwen3-reranker-0.6b)
-6. **MMR diversity** — Removes near-duplicate results
-7. **Temporal decay** — Boosts recent memories, fades old ones
-8. **Top-K** — Returns results with snippets + citations
-
-## Components
-
-### Server (`/server`)
-- Bun HTTP server, persistent daemon on localhost:7420
-- Models loaded once at startup (embedding + reranker + query expansion)
-- SQLite storage with FTS5 + sqlite-vec
-- File watcher with debounced re-indexing
-- Query queue with priority over indexing work
-
-### OpenClaw Plugin (`/plugin`)
-- `kind: "memory"` — replaces memory-core via `plugins.slots.memory`
-- `memory_search` → HTTP POST to server
-- `memory_get` → reads files directly
-- Config: `{ serverUrl, enabled }`
-
-## Models
-
-| Role | Model | Size | Source |
-|------|-------|------|--------|
-| Embedding | nomic-embed-text-v1.5 | 768-dim | LM Studio API (localhost:1234) |
-| Query Expansion | qwen3.5-9b | - | LM Studio API (localhost:1234) |
-| Reranker | qwen3-reranker-0.6b-q8_0 | 639MB | GGUF (node-llama-cpp, in-process) |
-
-LM Studio handles embeddings + query expansion (already running). Only the reranker loads in-process (cross-encoders aren't supported by OpenAI-compatible APIs).
-
-## API
-
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/search` | POST | Search memories `{query, maxResults?, minScore?}` |
-| `/index` | POST | Trigger re-index `{paths?}` |
-| `/health` | GET | Server + model status |
-| `/status` | GET | Detailed index stats |
-| `/collections` | POST | Add/remove watched directories |
-
-## Prerequisites
-
-- [LM Studio](https://lmstudio.ai) running on localhost:1234 with:
-  - `nomic-embed-text-v1.5` (embedding model)
-  - `qwen3.5-9b` or similar chat model (query expansion)
-- Reranker GGUF at `~/.cache/qmd/models/hf_ggml-org_qwen3-reranker-0.6b-q8_0.gguf`
-
-## Setup
+## Installation
 
 ```bash
-# Install deps
 bun install
-
-# Start server (reranker model auto-loads, LM Studio handles the rest)
-bun run server/index.ts
-
-# Or as a daemon
-bun run server/index.ts &
-
-# Configure OpenClaw
-# plugins.slots.memory = "lobs-memory"
-# plugins.entries.lobs-memory.config.serverUrl = "http://localhost:7420"
 ```
 
-## Config
+## Configuration
 
-Server config via `config.json` or environment:
+Edit `config.json` or set environment variables:
 
 ```json
 {
   "port": 7420,
+  "lmstudio": {
+    "baseUrl": "http://localhost:1234/v1",
+    "embeddingModel": "text-embedding-nomic-embed-text-v1.5"
+  },
   "models": {
-    "embedding": "~/.cache/qmd/models/hf_ggml-org_embeddinggemma-300M-Q8_0.gguf",
-    "reranker": "~/.cache/qmd/models/hf_ggml-org_qwen3-reranker-0.6b-q8_0.gguf",
-    "queryExpansion": "~/.cache/qmd/models/hf_tobil_qmd-query-expansion-1.7B-q4_k_m.gguf"
+    "reranker": "~/.cache/qmd/models/hf_ggml-org_qwen3-reranker-0.6b-q8_0.gguf"
   },
   "collections": [
-    { "name": "memory", "path": "~/.openclaw/workspace", "pattern": ["MEMORY.md", "memory/**/*.md"] },
-    { "name": "shared", "path": "~/lobs-shared-memory", "pattern": "**/*.md" }
+    {
+      "name": "memory",
+      "path": "~/.openclaw/workspace",
+      "pattern": ["MEMORY.md", "memory/**/*.md"]
+    }
+  ]
+}
+```
+
+Environment variables:
+- `PORT` - Server port (default: 7420)
+- `LMSTUDIO_URL` - LM Studio base URL
+- `EMBEDDING_MODEL` - Embedding model name
+- `RERANKER_MODEL` - Path to reranker GGUF
+
+## Usage
+
+### Start server
+
+```bash
+bun run start
+# or with auto-reload during development:
+bun run dev
+```
+
+### Search API
+
+```bash
+curl -X POST http://localhost:7420/search \
+  -H "Content-Type: application/json" \
+  -d '{"query": "github issues", "maxResults": 5}'
+```
+
+Response:
+```json
+{
+  "results": [
+    {
+      "path": "/path/to/file.md",
+      "startLine": 10,
+      "endLine": 50,
+      "score": 0.85,
+      "snippet": "...",
+      "source": "memory",
+      "citation": "/path/to/file.md:10-50"
+    }
   ],
-  "search": {
-    "vectorWeight": 0.7,
-    "textWeight": 0.3,
-    "mmr": { "enabled": true, "lambda": 0.7 },
-    "temporalDecay": { "enabled": true, "halfLifeDays": 30 },
-    "reranking": { "enabled": true, "topK": 20 },
-    "queryExpansion": { "enabled": true }
-  },
-  "chunking": {
-    "targetTokens": 400,
-    "overlapTokens": 80
+  "query": "github issues",
+  "timings": {
+    "totalMs": 150,
+    "bm25Ms": 2,
+    "vectorMs": 45,
+    "rerankMs": 98
   }
 }
 ```
+
+### Health check
+
+```bash
+curl http://localhost:7420/health
+```
+
+### Status
+
+```bash
+curl http://localhost:7420/status
+```
+
+### Manual re-index
+
+```bash
+curl -X POST http://localhost:7420/index
+```
+
+## Architecture
+
+- **server/config.ts** - Configuration loading
+- **server/db.ts** - SQLite database with FTS5 and sqlite-vec
+- **server/chunker.ts** - Markdown chunking
+- **server/embedder.ts** - LM Studio embedding client
+- **server/reranker.ts** - node-llama-cpp reranker
+- **server/search.ts** - Full search pipeline
+- **server/indexer.ts** - File indexing and watching
+- **server/index.ts** - HTTP server
+
+## Search Pipeline
+
+1. **BM25 search** - Keyword search via SQLite FTS5
+2. **Vector search** - Semantic search via sqlite-vec
+3. **Weighted merge** - Combine scores (default: 70% vector, 30% text)
+4. **Neural reranking** - Cross-encoder scoring (if available)
+5. **Temporal decay** - Exponential decay based on file date
+6. **MMR diversity** - Maximal marginal relevance filtering
+7. **Return top-K** - Default 8 results
+
+## Performance
+
+- Cold start: ~3-5s (loads reranker GGUF)
+- Search latency: 100-200ms (with reranking)
+- Embedding: ~25ms per chunk (LM Studio)
+- Reranking: ~50-100ms for 20 candidates
+
+## Development
+
+```bash
+# Install dependencies
+bun install
+
+# Run with auto-reload
+bun run dev
+
+# Check database
+sqlite3 ~/.openclaw/plugins/lobs-memory/index.db "SELECT COUNT(*) FROM documents;"
+```
+
+## Troubleshotics
+
+**LM Studio connection errors:**
+- Make sure LM Studio is running on localhost:1234
+- Check that `text-embedding-nomic-embed-text-v1.5` is loaded in LM Studio
+
+**Reranker not loading:**
+- Check that the GGUF file exists at the configured path
+- The server will work without reranking if the model is missing (degrades gracefully)
+
+**Slow initial startup:**
+- First run indexes all files (can take a few minutes for large collections)
+- Subsequent starts are fast (~3s) because files are cached
+- The server is responsive immediately; indexing runs in background
+
+## License
+
+Private - Part of the lobs-ai project.

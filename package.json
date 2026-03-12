@@ -10,11 +10,10 @@
   },
   "dependencies": {
     "node-llama-cpp": "^3.0.0",
-    "better-sqlite3": "^11.0.0",
-    "chokidar": "^4.0.0"
+    "chokidar": "^4.0.0",
+    "glob": "^10.0.0"
   },
   "devDependencies": {
-    "@types/better-sqlite3": "^7.6.0",
     "typescript": "^5.5.0"
   }
 }

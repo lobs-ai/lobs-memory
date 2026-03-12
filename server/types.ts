@@ -2,10 +2,13 @@
 
 export interface Config {
   port: number;
+  lmstudio: {
+    baseUrl: string;
+    embeddingModel: string;
+    chatModel: string;
+  };
   models: {
-    embedding: string;
     reranker: string;
-    queryExpansion: string;
   };
   collections: Collection[];
   search: SearchConfig;
