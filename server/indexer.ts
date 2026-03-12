@@ -72,6 +72,7 @@ async function indexAllCollections(): Promise<void> {
 async function indexCollection(collection: Collection): Promise<void> {
   if (!state.config) return;
 
+  const startTime = Date.now();
   console.log(`Indexing collection: ${collection.name} (${collection.path})`);
 
   // Find all matching files
@@ -90,16 +91,22 @@ async function indexCollection(collection: Collection): Promise<void> {
   console.log(`Found ${files.length} files in ${collection.name}`);
 
   // Index each file
+  let indexed = 0;
   for (const file of files) {
-    await indexFile(file, collection.name);
+    const changed = await indexFile(file, collection.name);
+    if (changed) indexed++;
   }
+
+  const elapsed = Date.now() - startTime;
+  console.log(`Collection ${collection.name}: ${indexed}/${files.length} files indexed in ${elapsed}ms`);
 }
 
 /**
  * Index a single file
+ * @returns true if file was indexed, false if skipped (unchanged)
  */
-async function indexFile(path: string, collectionName: string): Promise<void> {
-  if (!state.config) return;
+async function indexFile(path: string, collectionName: string): Promise<boolean> {
+  if (!state.config) return false;
 
   try {
     // Check if file has changed
@@ -110,10 +117,11 @@ async function indexFile(path: string, collectionName: string): Promise<void> {
     const existing = getDocument(path);
     if (existing && existing.hash === hash && existing.mtime === stats.mtimeMs) {
       // File unchanged, skip
-      return;
+      return false;
     }
 
-    console.log(`Indexing: ${path}`);
+    const relPath = path.replace(process.env.HOME || "", "~");
+    console.log(`Indexing: ${relPath}`);
 
     // Upsert document
     const docId = upsertDocument({
@@ -130,6 +138,7 @@ async function indexFile(path: string, collectionName: string): Promise<void> {
 
     // Chunk the file
     const chunkResults = chunkMarkdown(content, state.config.chunking);
+    console.log(`  → ${chunkResults.length} chunks created`);
 
     // Prepare chunks for insertion
     const chunks = chunkResults.map(chunk => ({
@@ -186,8 +195,11 @@ async function indexFile(path: string, collectionName: string): Promise<void> {
 
     // Clear file from search cache
     clearFileCache(path);
+    
+    return true;
   } catch (err) {
     console.error(`Error indexing ${path}:`, err);
+    return false;
   }
 }
 

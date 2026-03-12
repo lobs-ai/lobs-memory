@@ -68,6 +68,9 @@ async function startup() {
       try {
         // Health check
         if (path === "/health" && req.method === "GET") {
+          const timestamp = new Date().toISOString().replace("T", " ").split(".")[0];
+          console.log(`[${timestamp}] HEALTH check`);
+          
           const stats = getIndexStats();
           const embedderHealth = await checkEmbedderHealth();
           const rerankerStatus = getRerankerStatus();
@@ -78,11 +81,14 @@ async function startup() {
             models: {
               embedding: {
                 loaded: embedderHealth.available,
-                path: config.lmstudio.embeddingModel,
+                model: config.lmstudio.embeddingModel,
               },
               reranker: {
                 loaded: rerankerStatus.available,
-                path: config.models.reranker,
+                mode: rerankerStatus.mode || "none",
+                model: config.reranker?.mode === "lmstudio" 
+                  ? config.reranker.lmstudio?.model || config.lmstudio.chatModel
+                  : undefined,
               },
               queryExpansion: {
                 loaded: false,
@@ -158,7 +164,12 @@ async function startup() {
 
         return new Response("Not Found", { status: 404 });
       } catch (err) {
-        console.error("Request error:", err);
+        const timestamp = new Date().toISOString().replace("T", " ").split(".")[0];
+        const errorMsg = err instanceof Error ? err.message : String(err);
+        console.error(`[${timestamp}] ERROR ${url.pathname}: ${errorMsg}`);
+        if (err instanceof Error && err.stack) {
+          console.error(err.stack);
+        }
         return new Response(
           JSON.stringify({
             error: err instanceof Error ? err.message : String(err),
@@ -173,13 +184,26 @@ async function startup() {
   });
 
   console.log(`\n✓ Server ready at http://localhost:${server.port}`);
-  console.log(`  - Embedder: ${embedderHealth.available ? "✓" : "✗"}`);
-  console.log(`  - Reranker: ${rerankerStatus.available ? "✓" : "✗"}`);
+  
+  // Log model configuration
+  console.log(`\nModels:`);
+  console.log(`  Embedding: ${config.lmstudio.embeddingModel} via LM Studio (${config.lmstudio.baseUrl})`);
+  const rerankerInfo = config.reranker?.mode === "lmstudio" 
+    ? `LM Studio chat (${config.reranker.lmstudio?.model || config.lmstudio.chatModel})`
+    : "disabled";
+  console.log(`  Reranker: ${rerankerInfo} ${rerankerStatus.available ? "✓" : "✗"}`);
+  
+  console.log(`\nSearch config:`);
+  console.log(`  Vector weight: ${config.search.vectorWeight}, Text weight: ${config.search.textWeight}`);
+  console.log(`  Reranking: ${config.search.reranking.enabled ? `enabled (top ${config.search.reranking.candidateCount} candidates)` : "disabled"}`);
+  console.log(`  MMR: ${config.search.mmr.enabled ? `enabled (λ=${config.search.mmr.lambda})` : "disabled"}`);
+  console.log(`  Temporal decay: ${config.search.temporalDecay.enabled ? `enabled (half-life=${config.search.temporalDecay.halfLifeDays}d)` : "disabled"}`);
 
   // 7. Start indexer in background (non-blocking)
   const stats = getIndexStats();
-  console.log(`  - Index: ${stats.documents} docs, ${stats.chunks} chunks (before initial scan)`);
-  console.log(`  - Collections: ${config.collections.map(c => c.name).join(", ")}`);
+  console.log(`\nIndex (before initial scan):`);
+  console.log(`  Documents: ${stats.documents}, Chunks: ${stats.chunks}`);
+  console.log(`  Collections: ${config.collections.map(c => c.name).join(", ")}`);
   
   // Run initial indexing in background
   startIndexer(config).then(() => {

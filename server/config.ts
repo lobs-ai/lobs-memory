@@ -39,15 +39,17 @@ export function loadConfig(configPath?: string): Config {
     config.lmstudio = config.lmstudio || { baseUrl: "", embeddingModel: "", chatModel: "" };
     config.lmstudio.embeddingModel = process.env.EMBEDDING_MODEL;
   }
+  if (process.env.RERANKER_MODE) {
+    config.reranker = config.reranker || { mode: "none" };
+    config.reranker.mode = process.env.RERANKER_MODE as "lmstudio" | "none";
+  }
   if (process.env.RERANKER_MODEL) {
-    config.models = config.models || { reranker: "" };
-    config.models.reranker = process.env.RERANKER_MODEL;
+    config.reranker = config.reranker || { mode: "lmstudio" };
+    config.reranker.lmstudio = config.reranker.lmstudio || { model: "" };
+    config.reranker.lmstudio.model = process.env.RERANKER_MODEL;
   }
 
   // Expand tildes in paths
-  if (config.models?.reranker) {
-    config.models.reranker = expandTilde(config.models.reranker);
-  }
   if (config.collections) {
     for (const col of config.collections) {
       col.path = expandTilde(col.path);
@@ -65,8 +67,11 @@ function getDefaultConfig(): Config {
       embeddingModel: "text-embedding-nomic-embed-text-v1.5",
       chatModel: "qwen/qwen3.5-9b",
     },
-    models: {
-      reranker: "~/.cache/qmd/models/hf_ggml-org_qwen3-reranker-0.6b-q8_0.gguf",
+    reranker: {
+      mode: "lmstudio",
+      lmstudio: {
+        model: "qwen/qwen3.5-9b",
+      },
     },
     collections: [
       {

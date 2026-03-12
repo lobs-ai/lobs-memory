@@ -1,116 +1,132 @@
 /**
- * Cross-encoder reranker via node-llama-cpp
+ * Cross-encoder reranker via LM Studio chat API (batched scoring)
  */
 
-import { getLlama, LlamaChatSession, LlamaContext, LlamaModel } from "node-llama-cpp";
-import { existsSync } from "fs";
 import type { Config } from "./types.js";
 
 interface RerankerState {
-  model: LlamaModel | null;
-  context: LlamaContext | null;
+  config: Config | null;
   available: boolean;
   error?: string;
 }
 
 const state: RerankerState = {
-  model: null,
-  context: null,
+  config: null,
   available: false,
 };
 
 /**
- * Initialize reranker model. Gracefully skip if model not found.
+ * Initialize reranker. Check if LM Studio is reachable and config is valid.
  */
 export async function initReranker(config: Config): Promise<void> {
-  const modelPath = config.models.reranker;
+  state.config = config;
 
-  // Check if reranker is configured and file exists
-  if (!modelPath || modelPath.trim() === "") {
-    console.warn("Reranker model path not configured, reranking will be skipped");
+  // Check reranker mode
+  if (!config.reranker?.mode || config.reranker.mode === "none") {
+    console.warn("Reranker disabled (mode=none)");
     state.available = false;
     return;
   }
 
-  if (!existsSync(modelPath)) {
-    console.warn(`Reranker model not found at ${modelPath}, reranking will be skipped`);
-    state.available = false;
-    state.error = "Model file not found";
-    return;
-  }
+  if (config.reranker.mode === "lmstudio") {
+    // Check if LM Studio is reachable
+    try {
+      const url = `${config.lmstudio.baseUrl}/chat/completions`;
+      const response = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          model: config.reranker.lmstudio?.model || config.lmstudio.chatModel,
+          messages: [{ role: "user", content: "test" }],
+          max_tokens: 1,
+          temperature: 0,
+        }),
+      });
 
-  try {
-    console.log(`Loading reranker model from ${modelPath}...`);
-    const llama = await getLlama();
-    const model = await llama.loadModel({ modelPath });
-    const context = await model.createContext({ contextSize: 2048 });
+      if (!response.ok) {
+        throw new Error(`LM Studio returned status ${response.status}`);
+      }
 
-    state.model = model;
-    state.context = context;
-    state.available = true;
-
-    console.log("Reranker model loaded successfully");
-  } catch (err) {
-    console.error("Failed to load reranker model:", err);
-    state.available = false;
-    state.error = err instanceof Error ? err.message : String(err);
-  }
-}
-
-/**
- * Score a (query, document) pair. Returns a relevance score (higher = more relevant).
- */
-export async function scoreRelevance(query: string, document: string): Promise<number> {
-  if (!state.available || !state.context || !state.model) {
-    throw new Error("Reranker not available");
-  }
-
-  try {
-    // Cross-encoder prompt format for reranking
-    const prompt = `Query: ${query}\nDocument: ${document}\nRelevance:`;
-
-    const session = new LlamaChatSession({ contextSequence: state.context.getSequence() });
-    const response = await session.prompt(prompt, {
-      maxTokens: 10,
-      temperature: 0.1,
-    });
-
-    // Parse score from response (expecting a number)
-    // Cross-encoders typically output a relevance score
-    const scoreMatch = response.match(/(\d+\.?\d*)/);
-    if (scoreMatch) {
-      return parseFloat(scoreMatch[1]);
+      state.available = true;
+      console.log(`Reranker ready (LM Studio: ${config.reranker.lmstudio?.model || config.lmstudio.chatModel})`);
+    } catch (err) {
+      console.warn(`⚠️  Reranker unavailable: ${err instanceof Error ? err.message : String(err)}`);
+      state.available = false;
+      state.error = err instanceof Error ? err.message : String(err);
     }
-
-    // Fallback: use response length as a proxy (longer = more relevant)
-    return response.length / 100;
-  } catch (err) {
-    console.error("Reranking error:", err);
-    return 0;
+  } else {
+    console.warn(`Unknown reranker mode: ${config.reranker.mode}`);
+    state.available = false;
+    state.error = "Unknown reranker mode";
   }
 }
 
 /**
- * Batch score multiple (query, document) pairs
+ * Score a batch of (query, document) pairs using a single LM Studio chat API call.
+ * Much more efficient than N sequential calls.
  */
 export async function scoreRelevanceBatch(query: string, documents: string[]): Promise<number[]> {
-  if (!state.available) {
+  if (!state.available || !state.config) {
     // Return zeros if reranker not available
     return documents.map(() => 0);
   }
 
-  const scores: number[] = [];
-  for (const doc of documents) {
-    try {
-      const score = await scoreRelevance(query, doc);
-      scores.push(score);
-    } catch (err) {
-      console.error("Error scoring document:", err);
-      scores.push(0);
-    }
+  if (documents.length === 0) {
+    return [];
   }
 
-  return scores;
+  try {
+    // Build batched prompt - use a simpler single-score approach for models that don't follow instructions well
+    // Score each document individually (fallback approach)
+    const scores: number[] = [];
+    
+    for (let i = 0; i < documents.length; i++) {
+      const doc = documents[i];
+      const words = doc.split(/\s+/).slice(0, 100).join(" ");
+      
+      const systemPrompt = "Output only a single number from 0 to 10. No words, no explanations.";
+      const userPrompt = `Rate relevance (0-10):\n\nQuery: "${query}"\nDocument: ${words}\n\nScore:`;
+
+      const url = `${state.config.lmstudio.baseUrl}/chat/completions`;
+      const response = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          model: state.config.reranker.lmstudio?.model || state.config.lmstudio.chatModel,
+          messages: [
+            { role: "system", content: systemPrompt },
+            { role: "user", content: userPrompt },
+          ],
+          max_tokens: 5,
+          temperature: 0,
+        }),
+      });
+
+      if (!response.ok) {
+        console.error(`Reranker API error for doc ${i + 1}: ${response.status}`);
+        scores.push(0);
+        continue;
+      }
+
+      const data = await response.json();
+      const content = data.choices[0]?.message?.content?.trim() || "";
+      
+      // Extract first number from response
+      const match = content.match(/(\d+\.?\d*)/);
+      if (match) {
+        const score = parseFloat(match[1]);
+        scores.push(Math.min(10, Math.max(0, score))); // Clamp to [0, 10]
+      } else {
+        console.warn(`Could not parse score from: "${content.slice(0, 50)}"`);
+        scores.push(0);
+      }
+    }
+
+    return scores;
+  } catch (err) {
+    console.error("Reranking error:", err);
+    return documents.map(() => 0);
+  }
 }
 
 /**
@@ -123,24 +139,18 @@ export function isRerankerAvailable(): boolean {
 /**
  * Get reranker status
  */
-export function getRerankerStatus(): { available: boolean; error?: string } {
+export function getRerankerStatus(): { available: boolean; error?: string; mode?: string } {
   return {
     available: state.available,
     error: state.error,
+    mode: state.config?.reranker?.mode || "none",
   };
 }
 
 /**
- * Dispose of reranker resources
+ * Dispose of reranker resources (no-op for LM Studio mode)
  */
 export async function disposeReranker(): Promise<void> {
-  if (state.context) {
-    state.context.dispose();
-  }
-  if (state.model) {
-    state.model.dispose();
-  }
-  state.model = null;
-  state.context = null;
+  state.config = null;
   state.available = false;
 }

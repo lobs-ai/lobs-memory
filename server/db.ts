@@ -201,16 +201,28 @@ export function vectorSearch(embedding: Float32Array, limit: number): Array<{ ch
   }
 }
 
-// BM25 search
+// BM25 search with FTS5 query escaping
 export function bm25Search(query: string, limit: number): Array<{ id: number; rank: number }> {
-  const stmt = db!.prepare(`
-    SELECT rowid as id, rank as rank
-    FROM chunks_fts
-    WHERE chunks_fts MATCH ?
-    ORDER BY rank
-    LIMIT ?
-  `);
-  return stmt.all(query, limit) as Array<{ id: number; rank: number }>;
+  // Escape FTS5 special characters by wrapping each word in double quotes
+  const escapedQuery = query
+    .split(/\s+/)
+    .filter(w => w.length > 0)
+    .map(w => `"${w.replace(/"/g, '""')}"`)  // Escape any quotes in the word
+    .join(" ");
+
+  try {
+    const stmt = db!.prepare(`
+      SELECT rowid as id, rank as rank
+      FROM chunks_fts
+      WHERE chunks_fts MATCH ?
+      ORDER BY rank
+      LIMIT ?
+    `);
+    return stmt.all(escapedQuery, limit) as Array<{ id: number; rank: number }>;
+  } catch (err) {
+    console.error("BM25 search error (returning empty results):", err);
+    return [];
+  }
 }
 
 // Embedding cache

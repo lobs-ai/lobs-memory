@@ -9,7 +9,6 @@
     "test": "bun test"
   },
   "dependencies": {
-    "node-llama-cpp": "^3.0.0",
     "chokidar": "^4.0.0",
     "glob": "^10.0.0"
   },

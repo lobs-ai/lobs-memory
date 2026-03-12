@@ -5,8 +5,8 @@
     "embeddingModel": "text-embedding-nomic-embed-text-v1.5",
     "chatModel": "qwen/qwen3.5-9b"
   },
-  "models": {
-    "reranker": "~/.cache/qmd/models/hf_ggml-org_qwen3-reranker-0.6b-q8_0.gguf"
+  "reranker": {
+    "mode": "none"
   },
   "collections": [
     {

@@ -24,6 +24,7 @@ export async function search(request: SearchRequest): Promise<SearchResponse> {
     throw new Error("Search not initialized");
   }
 
+  const timestamp = new Date().toISOString().replace("T", " ").split(".")[0];
   const startTime = Date.now();
   const timings: SearchResponse["timings"] = {
     totalMs: 0,
@@ -46,7 +47,12 @@ export async function search(request: SearchRequest): Promise<SearchResponse> {
   timings.vectorMs = Date.now() - vectorStart;
 
   // 3. Merge and score candidates
-  const candidates = mergeCandidates(bm25Results, vectorResults);
+  let candidates = mergeCandidates(bm25Results, vectorResults);
+
+  // 3.5. Filter by collections if specified
+  if (request.collections && request.collections.length > 0) {
+    candidates = candidates.filter(c => request.collections!.includes(c.collection));
+  }
 
   // 4. Rerank if available
   let reranked = candidates;
@@ -94,6 +100,12 @@ export async function search(request: SearchRequest): Promise<SearchResponse> {
 
   timings.totalMs = Date.now() - startTime;
 
+  // Log search request
+  console.log(`[${timestamp}] SEARCH "${request.query}" → ${searchResults.length} results in ${timings.totalMs}ms (bm25:${timings.bm25Ms}ms vec:${timings.vectorMs}ms${timings.rerankMs !== undefined ? ` rerank:${timings.rerankMs}ms` : ""})`);
+  searchResults.slice(0, 5).forEach((r, i) => {
+    console.log(`  #${i + 1} [${r.score.toFixed(2)}] ${r.citation}`);
+  });
+
   return {
     results: searchResults,
     query: request.query,
@@ -121,7 +133,9 @@ function mergeCandidates(
     const doc = db.prepare("SELECT path, collection FROM documents WHERE id = ?").get(chunk.doc_id) as any;
     if (!doc) continue;
 
-    const bm25Score = 1 / (1 + Math.max(0, -result.rank)); // FTS5 rank is negative
+    // FTS5 rank is negative (lower = better). Convert to 0-1 similarity.
+    // Typical range: -1 to -50. Use exponential decay to map to [0,1].
+    const bm25Score = Math.exp(result.rank / 10);
 
     candidateMap.set(result.id, {
       id: result.id,
@@ -145,7 +159,8 @@ function mergeCandidates(
     const doc = db.prepare("SELECT path, collection FROM documents WHERE id = ?").get(chunk.doc_id) as any;
     if (!doc) continue;
 
-    const vectorScore = 1 / (1 + result.distance); // Convert distance to similarity
+    // Cosine distance is in range [0, 2]. Convert to similarity in [0, 1].
+    const vectorScore = 1 - result.distance / 2;
 
     const existing = candidateMap.get(result.chunkId);
     if (existing) {
@@ -181,11 +196,14 @@ async function rerankCandidates(query: string, candidates: ScoredChunk[]): Promi
   const documents = candidates.map(c => c.text);
   const rerankScores = await scoreRelevanceBatch(query, documents);
 
+  // Normalize rerank scores from 0-10 to 0-1
+  const normalizedScores = rerankScores.map(s => s / 10);
+
   // Update scores and re-sort
   const reranked = candidates.map((chunk, i) => ({
     ...chunk,
-    rerankScore: rerankScores[i],
-    score: rerankScores[i], // Replace score with rerank score
+    rerankScore: normalizedScores[i],
+    score: normalizedScores[i], // Replace score with normalized rerank score
   }));
 
   reranked.sort((a, b) => b.score - a.score);

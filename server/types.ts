@@ -7,8 +7,11 @@ export interface Config {
     embeddingModel: string;
     chatModel: string;
   };
-  models: {
-    reranker: string;
+  reranker?: {
+    mode: "lmstudio" | "none";
+    lmstudio?: {
+      model: string;
+    };
   };
   collections: Collection[];
   search: SearchConfig;
@@ -79,8 +82,8 @@ export interface HealthResponse {
   status: "ok" | "degraded" | "error";
   uptime: number;
   models: {
-    embedding: { loaded: boolean; path: string };
-    reranker: { loaded: boolean; path: string };
+    embedding: { loaded: boolean; model: string };
+    reranker: { loaded: boolean; mode: string; model?: string };
     queryExpansion: { loaded: boolean; path: string };
   };
   index: {
