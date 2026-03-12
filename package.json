@@ -1,0 +1,20 @@
+{
+  "name": "lobs-memory",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "bun run --watch server/index.ts",
+    "start": "bun run server/index.ts",
+    "test": "bun test"
+  },
+  "dependencies": {
+    "node-llama-cpp": "^3.0.0",
+    "better-sqlite3": "^11.0.0",
+    "chokidar": "^4.0.0"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.0",
+    "typescript": "^5.5.0"
+  }
+}
