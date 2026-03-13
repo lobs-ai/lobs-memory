@@ -115,6 +115,9 @@ function createTables(db: Database): void {
       FOREIGN KEY (chunk_id) REFERENCES chunks(id) ON DELETE CASCADE
     );
   `);
+  
+  // Index for faster embedding lookups
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_chunk_embeddings_chunk_id ON chunk_embeddings(chunk_id)`);
 
   // Embedding cache
   db.exec(`
@@ -169,9 +172,16 @@ export function insertChunks(chunks: Chunk[]): void {
 }
 
 export function deleteChunks(docId: number): void {
-  // Delete embeddings for these chunks first
-  db!.prepare("DELETE FROM chunk_embeddings WHERE chunk_id IN (SELECT id FROM chunks WHERE doc_id = ?)").run(docId);
   db!.prepare("DELETE FROM chunks WHERE doc_id = ?").run(docId);
+  embeddingCache = null; // Invalidate cache (embeddings cascade delete via FK)
+}
+
+export function deleteEmbeddings(chunkIds: number[]): void {
+  if (chunkIds.length === 0) return;
+  
+  const placeholders = chunkIds.map(() => '?').join(',');
+  const stmt = db!.prepare(`DELETE FROM chunk_embeddings WHERE chunk_id IN (${placeholders})`);
+  stmt.run(...chunkIds);
   embeddingCache = null; // Invalidate cache
 }
 
@@ -236,10 +246,30 @@ export function invalidateEmbeddingCache(): void {
   embeddingCache = null;
 }
 
-// BM25 search with FTS5 query escaping
+/**
+ * Pre-process query to handle camelCase, snake_case, and paths
+ */
+function preprocessQuery(query: string): string {
+  return query
+    // Split camelCase: "memorySearch" → "memory Search"
+    .replace(/([a-z])([A-Z])/g, '$1 $2')
+    // Split snake_case: "memory_search" → "memory search"
+    .replace(/_/g, ' ')
+    // Strip common path prefixes for cleaner matching
+    .replace(/~\//g, '')
+    .replace(/\.openclaw\//g, '')
+    .replace(/workspace\//g, '');
+}
+
+/**
+ * BM25 search with improved tokenization handling
+ */
 export function bm25Search(query: string, limit: number): Array<{ id: number; rank: number }> {
+  // Pre-process query for better matching
+  const processedQuery = preprocessQuery(query);
+  
   // Escape FTS5 special characters by wrapping each word in double quotes
-  const escapedQuery = query
+  const escapedQuery = processedQuery
     .split(/\s+/)
     .filter(w => w.length > 0)
     .map(w => `"${w.replace(/"/g, '""')}"`)  // Escape any quotes in the word

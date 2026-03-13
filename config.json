@@ -43,8 +43,8 @@
     }
   },
   "chunking": {
-    "targetTokens": 400,
-    "overlapTokens": 80
+    "targetTokens": 300,
+    "overlapTokens": 40
   },
   "indexing": {
     "debounceMs": 2000,

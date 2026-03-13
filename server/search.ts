@@ -113,12 +113,20 @@ export async function search(request: SearchRequest): Promise<SearchResponse> {
     results = candidates.slice(0, maxResults);
   }
 
-  // Step 7: Min score filter
+  // Step 7: Normalize scores to [0, 1] range
+  if (results.length > 0) {
+    const maxScore = results[0].score; // Already sorted by score
+    if (maxScore > 1) {
+      results = results.map(r => ({ ...r, score: r.score / maxScore }));
+    }
+  }
+
+  // Step 8: Min score filter
   if (request.minScore !== undefined) {
     results = results.filter(r => r.score >= request.minScore!);
   }
 
-  // Step 8: Build response
+  // Step 9: Build response
   const searchResults: SearchResult[] = results.map(chunk => {
     const fileContent = readFileContent(chunk.path);
     const snippet = extractSnippet(fileContent, chunk.startLine, chunk.endLine);

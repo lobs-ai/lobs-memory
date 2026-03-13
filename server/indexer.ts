@@ -136,8 +136,8 @@ async function indexFile(path: string, collectionName: string): Promise<boolean>
       deleteChunks(docId);
     }
 
-    // Chunk the file
-    const chunkResults = chunkMarkdown(content, state.config.chunking);
+    // Chunk the file (pass filename for heading context)
+    const chunkResults = chunkMarkdown(content, state.config.chunking, path);
     console.log(`  → ${chunkResults.length} chunks created`);
 
     // Prepare chunks for insertion
