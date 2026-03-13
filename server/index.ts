@@ -103,6 +103,23 @@ async function startup() {
           return new Response(JSON.stringify(health, null, 2), { headers });
         }
 
+        // Lightweight health check
+        if (path === "/healthz" && req.method === "GET") {
+          const timestamp = new Date().toISOString().replace("T", " ").split(".")[0];
+          console.log(`[${timestamp}] HEALTHZ check`);
+          
+          const stats = getIndexStats();
+
+          const healthz = {
+            status: "ok",
+            uptime: Math.floor((Date.now() - startTime) / 1000),
+            documents: stats.documents,
+            chunks: stats.chunks,
+          };
+
+          return new Response(JSON.stringify(healthz), { headers });
+        }
+
         // Search
         if (path === "/search" && req.method === "POST") {
           const body = (await req.json()) as SearchRequest;

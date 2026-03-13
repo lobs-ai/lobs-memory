@@ -6,7 +6,7 @@
     "chatModel": "qwen2.5-1.5b-instruct-mlx"
   },
   "reranker": {
-    "mode": "onnx-sidecar"
+    "mode": "none"
   },
   "collections": [
     {
@@ -28,43 +28,121 @@
       "name": "projects",
       "path": "~/paw-hub",
       "pattern": "**/*.md",
-      "exclude": ["node_modules/**", ".git/**", "dist/**", "build/**"]
+      "exclude": [
+        "node_modules/**",
+        ".git/**",
+        "dist/**",
+        "build/**"
+      ]
     },
     {
       "name": "projects",
       "path": "~/lobs-mobile",
       "pattern": "**/*.md",
-      "exclude": ["node_modules/**", ".git/**", "dist/**", "build/**", "Pods/**", ".build/**"]
+      "exclude": [
+        "node_modules/**",
+        ".git/**",
+        "dist/**",
+        "build/**",
+        "Pods/**",
+        ".build/**"
+      ]
     },
     {
       "name": "projects",
       "path": "~/lobs/lobs-nexus",
       "pattern": "**/*.md",
-      "exclude": ["node_modules/**", ".git/**", "dist/**", "build/**"]
+      "exclude": [
+        "node_modules/**",
+        ".git/**",
+        "dist/**",
+        "build/**"
+      ]
     },
     {
       "name": "projects",
       "path": "~/lobs/lobs-core",
       "pattern": "**/*.md",
-      "exclude": ["node_modules/**", ".git/**", "dist/**", "build/**"]
+      "exclude": [
+        "node_modules/**",
+        ".git/**",
+        "dist/**",
+        "build/**"
+      ]
     },
     {
       "name": "projects",
       "path": "~/lobs-memory",
       "pattern": "**/*.md",
-      "exclude": ["node_modules/**", ".git/**", "dist/**", "build/**"]
+      "exclude": [
+        "node_modules/**",
+        ".git/**",
+        "dist/**",
+        "build/**"
+      ]
     },
     {
       "name": "projects",
       "path": "~/paw-designs",
       "pattern": "**/*.md",
-      "exclude": ["node_modules/**", ".git/**", "dist/**", "build/**"]
+      "exclude": [
+        "node_modules/**",
+        ".git/**",
+        "dist/**",
+        "build/**"
+      ]
     },
     {
       "name": "projects",
       "path": "~/bot-shared",
       "pattern": "**/*.md",
-      "exclude": ["node_modules/**", ".git/**", "dist/**", "build/**"]
+      "exclude": [
+        "node_modules/**",
+        ".git/**",
+        "dist/**",
+        "build/**"
+      ]
+    },
+    {
+      "name": "projects",
+      "path": "~/ship-api",
+      "pattern": "**/*.md",
+      "exclude": [
+        "node_modules/**",
+        ".git/**",
+        "dist/**",
+        "build/**"
+      ]
+    },
+    {
+      "name": "projects",
+      "path": "~/lobs-sail",
+      "pattern": "**/*.md",
+      "exclude": [
+        "node_modules/**",
+        ".git/**",
+        "dist/**",
+        "build/**"
+      ]
+    },
+    {
+      "name": "projects",
+      "path": "~/paw/lobs-sets-sail",
+      "pattern": "**/*.md",
+      "exclude": [
+        "node_modules/**",
+        ".git/**",
+        "dist/**",
+        "build/**"
+      ]
+    },
+    {
+      "name": "projects",
+      "path": "~/lobs/lobslab-infra",
+      "pattern": "**/*.md",
+      "exclude": [
+        ".git/**"
+      ]
     }
   ],
   "search": {
