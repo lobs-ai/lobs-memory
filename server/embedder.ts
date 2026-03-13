@@ -25,14 +25,37 @@ export function initEmbedder(cfg: Config): void {
   console.log(`Embedder initialized: ${cfg.lmstudio.baseUrl} (${cfg.lmstudio.embeddingModel})`);
 }
 
+// Qwen3-Embedding instruction prefix — improves retrieval by 1-5%
+const QUERY_INSTRUCTION = "Instruct: Given a search query, retrieve relevant passages that answer the query\nQuery: ";
+
 /**
- * Embed a single text string
+ * Check if the current model is a Qwen3 embedding model (supports instruction-aware embedding)
+ */
+function isInstructionAware(): boolean {
+  return config?.lmstudio.embeddingModel?.toLowerCase().includes("qwen3-embedding") ?? false;
+}
+
+/**
+ * Embed a single text string (as a document — no instruction prefix)
  */
 export async function embed(text: string): Promise<Float32Array> {
   if (!config) {
     throw new Error("Embedder not initialized");
   }
 
+  const results = await embedBatch([text]);
+  return results[0];
+}
+
+/**
+ * Embed a query string (with instruction prefix for supported models)
+ */
+export async function embedQuery(query: string): Promise<Float32Array> {
+  if (!config) {
+    throw new Error("Embedder not initialized");
+  }
+
+  const text = isInstructionAware() ? `${QUERY_INSTRUCTION}${query}` : query;
   const results = await embedBatch([text]);
   return results[0];
 }

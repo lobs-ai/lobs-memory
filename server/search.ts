@@ -9,7 +9,7 @@
  */
 
 import { bm25Search, vectorSearch, getDb } from "./db.js";
-import { embed } from "./embedder.js";
+import { embed, embedQuery } from "./embedder.js";
 import { scoreRelevanceBatch, isRerankerAvailable } from "./reranker.js";
 import { extractSnippet, createCitation } from "./chunker.js";
 import { expandQuery, initExpander } from "./expander.js";
@@ -47,7 +47,7 @@ export async function search(request: SearchRequest): Promise<SearchResponse> {
   timings.bm25Ms = Date.now() - bm25Start;
 
   const vectorStart = Date.now();
-  const queryEmbedding = await embed(request.query);
+  const queryEmbedding = await embedQuery(request.query);
   const vectorResults = vectorSearch(queryEmbedding, candidateCount);
   timings.vectorMs = Date.now() - vectorStart;
 
