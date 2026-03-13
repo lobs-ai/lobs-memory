@@ -64,11 +64,27 @@ export async function initReranker(config: Config): Promise<void> {
  * Returns raw logit scores (higher = more relevant, can be negative).
  */
 export async function scoreRelevanceBatch(query: string, documents: string[]): Promise<number[]> {
-  if (!state.available || !state.config) {
+  if (!state.config || state.config.reranker?.mode === "none") {
     return documents.map(() => 0);
   }
 
   if (documents.length === 0) return [];
+
+  // Lazy connect: if not available yet, try once (sidecar may have started late)
+  if (!state.available && state.config.reranker?.mode === "onnx-sidecar") {
+    try {
+      const resp = await fetch(`${RERANKER_URL}/health`, { signal: AbortSignal.timeout(1000) });
+      if (resp.ok) {
+        state.available = true;
+        state.error = undefined;
+        console.log("Reranker sidecar connected (lazy init)");
+      }
+    } catch { /* still not ready, fall through */ }
+  }
+
+  if (!state.available) {
+    return documents.map(() => 0);
+  }
 
   try {
     const response = await fetch(`${RERANKER_URL}/rerank`, {
