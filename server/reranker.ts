@@ -76,7 +76,7 @@ export async function scoreRelevanceBatch(query: string, documents: string[]): P
   }
 
   const startTime = Date.now();
-  const timeoutMs = 1500; // 1.5s budget
+  const timeoutMs = 3000; // 3s budget
 
   try {
     // Build batched prompt with all documents
@@ -95,6 +95,7 @@ ${docSnippets.join("\n\n")}`;
     const response = await fetch(url, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
+      signal: AbortSignal.timeout(timeoutMs),
       body: JSON.stringify({
         model: state.config.reranker.lmstudio?.model || state.config.lmstudio.chatModel,
         messages: [
@@ -106,14 +107,6 @@ ${docSnippets.join("\n\n")}`;
         stop: ["\n\n"],
       }),
     });
-
-    const elapsed = Date.now() - startTime;
-
-    // Check timeout budget
-    if (elapsed > timeoutMs) {
-      console.warn(`⚠️  Reranker took ${elapsed}ms (> ${timeoutMs}ms budget), skipping reranking for this query`);
-      return documents.map(() => 0);
-    }
 
     if (!response.ok) {
       console.error(`Reranker API error: ${response.status}`);

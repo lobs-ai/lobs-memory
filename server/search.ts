@@ -370,10 +370,13 @@ async function rerankCandidates(query: string, candidates: ScoredChunk[]): Promi
   const rerankScores = await scoreRelevanceBatch(query, documents);
   const normalizedScores = rerankScores.map(s => s / 10);
 
+  // Blend: 60% reranker + 40% original score (don't fully replace)
   const reranked = candidates.map((chunk, i) => ({
     ...chunk,
     rerankScore: normalizedScores[i],
-    score: normalizedScores[i],
+    score: normalizedScores[i] > 0 
+      ? 0.6 * normalizedScores[i] + 0.4 * chunk.score
+      : chunk.score, // If reranker returned 0, keep original
   }));
 
   reranked.sort((a, b) => b.score - a.score);

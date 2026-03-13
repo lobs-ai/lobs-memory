@@ -25,6 +25,8 @@ const memoryLobsPlugin = {
 
   register(api: OpenClawPluginApi) {
     const log = api.logger;
+    log.info("lobs-memory: registering plugin hooks and tools...");
+    log.info(`lobs-memory: api.on available: ${typeof api.on}`);
 
     // ── Feature 1: Auto-injection hook ──────────────────────────────
     // Cache for deduplication (query -> results, TTL 30s)
@@ -35,16 +37,31 @@ const memoryLobsPlugin = {
       // Only inject for main agent sessions, not workers/subagents
       if (ctx.agentId && ctx.agentId !== "main") return {};
 
-      // Only inject on direct user messages, not on heartbeats/cron/memory triggers
-      if (ctx.trigger && ctx.trigger !== "user") return {};
+      // Log what we're seeing
+      log.info(`memory-inject: hook fired! trigger=${ctx.trigger} agentId=${ctx.agentId} msgCount=${event.messages.length}`);
 
-      // Check last message is actually from the user (not a tool result mid-chain)
-      const lastMsg = event.messages[event.messages.length - 1] as any;
-      if (!lastMsg || lastMsg.role !== "user") return {};
+      // Only inject on direct user messages, not on heartbeats/cron/memory triggers
+      if (ctx.trigger && ctx.trigger !== "user") {
+        log.info(`memory-inject: skipped (trigger=${ctx.trigger})`);
+        return {};
+      }
+
+      // Find the last user message (it may not be the very last in the array)
+      let lastUserMsg: any = null;
+      for (let i = event.messages.length - 1; i >= 0; i--) {
+        const msg = event.messages[i] as any;
+        if (msg.role === "user") { lastUserMsg = msg; break; }
+      }
+      if (!lastUserMsg) return {};
+
+      log.info(`memory-inject: found user msg: "${(typeof lastUserMsg.content === "string" ? lastUserMsg.content : "[complex]").slice(0, 80)}"`);
 
       // Skip system/inter-session messages
-      const content = typeof lastMsg.content === "string" ? lastMsg.content : "";
-      if (content.startsWith("[Inter-session message]") || content.startsWith("[System")) return {};
+      const content = typeof lastUserMsg.content === "string" ? lastUserMsg.content : "";
+      if (content.startsWith("[Inter-session message]") || content.startsWith("[System")) {
+        log.info("memory-inject: skipped (system/inter-session)");
+        return {};
+      }
 
       // Extract recent user messages (last 2-3)
       const recentUserMessages: string[] = [];
@@ -64,7 +81,11 @@ const memoryLobsPlugin = {
       const query = recentUserMessages.join(" ").slice(0, 500);
 
       // Skip trivial messages
-      if (isTrivial(query)) return {};
+      if (isTrivial(query)) {
+        log.info(`memory-inject: skipped (trivial: "${query.slice(0, 50)}")`);
+        return {};
+      }
+      log.info(`memory-inject: searching for "${query.slice(0, 80)}..."`);
 
       // Check cache
       const cached = injectionCache.get(query);
