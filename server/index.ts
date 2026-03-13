@@ -6,12 +6,14 @@
  */
 
 import { loadConfig } from "./config.js";
-import { initDb, getIndexStats, closeDb } from "./db.js";
+import { initDb, getIndexStats, closeDb, queryGraph, getDb } from "./db.js";
 import { initEmbedder, checkEmbedderHealth } from "./embedder.js";
 import { initReranker, isRerankerAvailable, getRerankerStatus, disposeReranker } from "./reranker.js";
 import { initSearch, search } from "./search.js";
 import { startIndexer, stopIndexer, getIndexerStatus, reindexAll } from "./indexer.js";
-import type { SearchRequest, SearchResponse, HealthResponse } from "./types.js";
+import { extractSnippet } from "./chunker.js";
+import { readFileSync } from "fs";
+import type { SearchRequest, SearchResponse, HealthResponse, GraphRequest, GraphResponse } from "./types.js";
 
 const startTime = Date.now();
 
@@ -160,6 +162,80 @@ async function startup() {
             })),
           };
           return new Response(JSON.stringify(collections, null, 2), { headers });
+        }
+
+        // Graph query (Feature 4)
+        if (path === "/graph" && req.method === "POST") {
+          const body = (await req.json()) as GraphRequest;
+          if (!body.entity) {
+            return new Response(JSON.stringify({ error: "entity required" }), {
+              status: 400,
+              headers,
+            });
+          }
+
+          const depth = body.depth || 2;
+          const edges = queryGraph(body.entity, depth);
+
+          // Build node and edge lists
+          const nodeMap = new Map<string, { name: string; type: string }>();
+          const graphEdges: Array<{ from: string; relation: string; to: string }> = [];
+          const sourceChunkIds = new Set<number>();
+
+          for (const edge of edges) {
+            // Add nodes
+            nodeMap.set(edge.entity1.toLowerCase(), {
+              name: edge.entity1,
+              type: edge.entity1_type,
+            });
+            nodeMap.set(edge.entity2.toLowerCase(), {
+              name: edge.entity2,
+              type: edge.entity2_type,
+            });
+
+            // Add edge
+            graphEdges.push({
+              from: edge.entity1,
+              relation: edge.relation,
+              to: edge.entity2,
+            });
+
+            // Track source chunks
+            sourceChunkIds.add(edge.source_chunk_id);
+          }
+
+          // Get source chunks
+          const db = getDb();
+          const sourceChunks: GraphResponse["sourceChunks"] = [];
+
+          for (const chunkId of sourceChunkIds) {
+            const chunk = db.prepare(`
+              SELECT c.text, c.start_line, c.end_line, d.path
+              FROM chunks c
+              JOIN documents d ON c.doc_id = d.id
+              WHERE c.id = ?
+            `).get(chunkId) as { text: string; start_line: number; end_line: number; path: string } | undefined;
+
+            if (chunk) {
+              const fileContent = readFileSync(chunk.path, "utf-8");
+              const snippet = extractSnippet(fileContent, chunk.start_line, chunk.end_line);
+
+              sourceChunks.push({
+                path: chunk.path,
+                startLine: chunk.start_line,
+                endLine: chunk.end_line,
+                snippet,
+              });
+            }
+          }
+
+          const response: GraphResponse = {
+            nodes: Array.from(nodeMap.values()),
+            edges: graphEdges,
+            sourceChunks,
+          };
+
+          return new Response(JSON.stringify(response, null, 2), { headers });
         }
 
         return new Response("Not Found", { status: 404 });

@@ -57,6 +57,8 @@ export interface SearchRequest {
   maxResults?: number;
   minScore?: number;
   collections?: string[];
+  conversationContext?: string;  // Feature 2: bias search toward conversation topic
+  entityFilter?: { type: string; value: string };  // Feature 3: filter by entity
 }
 
 export interface SearchResult {
@@ -116,4 +118,34 @@ export interface ScoredChunk extends Chunk {
   bm25Score?: number;
   vectorScore?: number;
   rerankScore?: number;
+}
+
+// Graph query types (Feature 4)
+
+export interface GraphRequest {
+  entity: string;
+  depth?: number;
+  type?: string;
+}
+
+export interface GraphNode {
+  name: string;
+  type: string;
+}
+
+export interface GraphEdge {
+  from: string;
+  relation: string;
+  to: string;
+}
+
+export interface GraphResponse {
+  nodes: GraphNode[];
+  edges: GraphEdge[];
+  sourceChunks: Array<{
+    path: string;
+    startLine: number;
+    endLine: number;
+    snippet: string;
+  }>;
 }

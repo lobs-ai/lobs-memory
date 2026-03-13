@@ -26,6 +26,100 @@ const memoryLobsPlugin = {
   register(api: OpenClawPluginApi) {
     const log = api.logger;
 
+    // ── Feature 1: Auto-injection hook ──────────────────────────────
+    // Cache for deduplication (query -> results, TTL 30s)
+    const injectionCache = new Map<string, { results: any; timestamp: number }>();
+    const CACHE_TTL_MS = 30000;
+
+    api.on("before_prompt_build", async (event: any, ctx: any) => {
+      // Only inject for main agent sessions, not workers/subagents
+      if (ctx.agentId && ctx.agentId !== "main") return {};
+
+      // Only inject on direct user messages, not on heartbeats/cron/memory triggers
+      if (ctx.trigger && ctx.trigger !== "user") return {};
+
+      // Check last message is actually from the user (not a tool result mid-chain)
+      const lastMsg = event.messages[event.messages.length - 1] as any;
+      if (!lastMsg || lastMsg.role !== "user") return {};
+
+      // Skip system/inter-session messages
+      const content = typeof lastMsg.content === "string" ? lastMsg.content : "";
+      if (content.startsWith("[Inter-session message]") || content.startsWith("[System")) return {};
+
+      // Extract recent user messages (last 2-3)
+      const recentUserMessages: string[] = [];
+      for (let i = event.messages.length - 1; i >= 0 && recentUserMessages.length < 3; i--) {
+        const msg = event.messages[i] as any;
+        if (msg.role === "user") {
+          const msgContent = typeof msg.content === "string" ? msg.content : "";
+          if (msgContent) {
+            recentUserMessages.unshift(msgContent);
+          }
+        }
+      }
+
+      if (recentUserMessages.length === 0) return {};
+
+      // Build query from recent messages
+      const query = recentUserMessages.join(" ").slice(0, 500);
+
+      // Skip trivial messages
+      if (isTrivial(query)) return {};
+
+      // Check cache
+      const cached = injectionCache.get(query);
+      if (cached && Date.now() - cached.timestamp < CACHE_TTL_MS) {
+        log.info(`memory-inject: cache hit for "${query.slice(0, 50)}..."`);
+        return { prependContext: formatContextBlock(cached.results) };
+      }
+
+      // Search lobs-memory with conversation context
+      try {
+        const conversationContext = recentUserMessages.slice(-5).join("\n").slice(0, 1000);
+
+        const response = await fetch(`${LOBS_MEMORY_URL}/search`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            query,
+            maxResults: 5,
+            minScore: 0.5,
+            conversationContext,
+          }),
+          signal: AbortSignal.timeout(3000),
+        });
+
+        if (!response.ok) {
+          log.warn(`memory-inject: search failed (${response.status})`);
+          return {};
+        }
+
+        const data = await response.json();
+        if (!data.results || data.results.length === 0) return {};
+
+        // Cache results
+        injectionCache.set(query, { results: data.results, timestamp: Date.now() });
+
+        // Clean old cache entries
+        for (const [key, value] of injectionCache.entries()) {
+          if (Date.now() - value.timestamp > CACHE_TTL_MS) {
+            injectionCache.delete(key);
+          }
+        }
+
+        log.info(`memory-inject: ${data.results.length} snippets for query: "${query.slice(0, 50)}..."`);
+
+        return { prependContext: formatContextBlock(data.results) };
+      } catch (err: any) {
+        if (err?.name === "TimeoutError" || err?.code === "ECONNREFUSED") {
+          log.warn("memory-inject: search timeout/unavailable, skipping");
+        } else {
+          log.warn(`memory-inject: error: ${err.message}`);
+        }
+        return {};
+      }
+    });
+
     // ── Service: start/stop the lobs-memory server ──────────────────
     api.registerService({
       id: "lobs-memory-server",
@@ -227,5 +321,45 @@ const memoryLobsPlugin = {
     );
   },
 };
+
+// ── Helper functions for auto-injection ────────────────────────────
+
+/**
+ * Check if a message is too trivial to warrant memory search
+ */
+function isTrivial(query: string): boolean {
+  // Too short
+  if (query.length < 10) return true;
+
+  // Common acknowledgments (case-insensitive)
+  const lower = query.toLowerCase().trim();
+  const trivialPhrases = [
+    "yes", "no", "ok", "sure", "thanks", "thank you", "got it", "nice",
+    "cool", "lol", "haha", "yep", "nope", "k", "kk", "okay", "alright",
+    "good", "great", "awesome", "sounds good", "makes sense",
+  ];
+
+  if (trivialPhrases.includes(lower)) return true;
+
+  // Only emoji
+  if (/^[\p{Emoji}\s]+$/u.test(query)) return true;
+
+  // Only punctuation
+  if (/^[^\w]+$/.test(query)) return true;
+
+  return false;
+}
+
+/**
+ * Format search results into a context block for injection
+ */
+function formatContextBlock(results: any[]): string {
+  const snippets = results.map((r: any) => {
+    const location = `[${r.source}/${r.path}:${r.startLine}-${r.endLine}]`;
+    return `${location} ${r.snippet}`;
+  });
+
+  return `<recalled-memory>\n${snippets.join("\n\n")}\n</recalled-memory>`;
+}
 
 export default memoryLobsPlugin;

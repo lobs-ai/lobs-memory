@@ -17,11 +17,17 @@ import {
   getCachedEmbedding,
   setCachedEmbedding,
   getDb,
+  insertEntities,
+  insertRelationships,
+  deleteEntities,
+  deleteRelationships,
 } from "./db.js";
 import { chunkMarkdown } from "./chunker.js";
 import { embedBatch } from "./embedder.js";
 import { clearFileCache } from "./search.js";
 import { parseFile } from "./parsers.js";
+import { patternExtract } from "./entities.js";
+import { extractRelationships } from "./graph.js";
 import type { Config, Collection } from "./types.js";
 
 interface IndexerState {
@@ -197,8 +203,13 @@ async function indexFile(path: string, collectionName: string): Promise<boolean>
       hash,
     });
 
-    // Delete old chunks if re-indexing
+    // Delete old chunks and entities/relationships if re-indexing
     if (existing) {
+      const oldChunks = await getInsertedChunks(docId);
+      for (const chunk of oldChunks) {
+        deleteEntities(chunk.id);
+        deleteRelationships(chunk.id);
+      }
       deleteChunks(docId);
     }
 
@@ -220,6 +231,21 @@ async function indexFile(path: string, collectionName: string): Promise<boolean>
 
     // Get chunk IDs (query back from DB)
     const insertedChunks = await getInsertedChunks(docId);
+
+    // Extract entities and relationships for each chunk (Feature 3 + 4)
+    for (const chunk of insertedChunks) {
+      // Entity extraction
+      const entities = patternExtract(chunk.text);
+      if (entities.length > 0) {
+        insertEntities(chunk.id, entities);
+      }
+
+      // Relationship extraction
+      const relationships = extractRelationships(chunk.text, chunk.id);
+      if (relationships.length > 0) {
+        insertRelationships(relationships);
+      }
+    }
 
     // Embed chunks (with caching by text hash)
     const modelName = state.config.lmstudio.embeddingModel;

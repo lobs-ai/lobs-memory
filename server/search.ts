@@ -54,6 +54,35 @@ export async function search(request: SearchRequest): Promise<SearchResponse> {
   // Weighted merge of BM25 + vector (this produces good 0.4-0.7 range scores)
   let candidates = mergeCandidates(bm25Results, vectorResults);
 
+  // Feature 2: Conversation context biasing
+  if (request.conversationContext) {
+    const contextStart = Date.now();
+    const contextEmbedding = await embed(request.conversationContext);
+    
+    // Apply context bias to all candidates
+    candidates = candidates.map(chunk => {
+      // Get chunk embedding from DB
+      const db = getDb();
+      const embRow = db.prepare("SELECT embedding FROM chunk_embeddings WHERE chunk_id = ?")
+        .get(chunk.id!) as { embedding: Buffer } | undefined;
+      
+      if (embRow) {
+        const chunkEmbedding = new Float32Array(embRow.embedding.buffer, embRow.embedding.byteOffset, embRow.embedding.byteLength / 4);
+        const contextSim = cosineSimilarity(contextEmbedding, chunkEmbedding);
+        
+        // Blend: 70% original score + 30% context similarity
+        const contextScore = (1 - ((1 - contextSim) / 2)); // Convert to 0-1 range
+        chunk.score = 0.7 * chunk.score + 0.3 * contextScore;
+      }
+      
+      return chunk;
+    });
+    
+    // Re-sort after context biasing
+    candidates.sort((a, b) => b.score - a.score);
+    timings.vectorMs += Date.now() - contextStart;
+  }
+
   // Step 2: Query expansion — add more candidates from expanded queries
   let expandedQueries: string[] | undefined;
   if (config.search.queryExpansion.enabled) {
@@ -88,12 +117,22 @@ export async function search(request: SearchRequest): Promise<SearchResponse> {
     }
   }
 
-  // Step 3: Collection filter
+  // Step 3: Entity filter (Feature 3)
+  if (request.entityFilter) {
+    const { searchByEntity } = await import("./db.js");
+    const matchingChunkIds = new Set(
+      searchByEntity(request.entityFilter.type, request.entityFilter.value)
+        .map(r => r.chunkId)
+    );
+    candidates = candidates.filter(c => matchingChunkIds.has(c.id!));
+  }
+
+  // Step 4: Collection filter
   if (request.collections && request.collections.length > 0) {
     candidates = candidates.filter(c => request.collections!.includes(c.collection));
   }
 
-  // Step 4: Reranking (if available)
+  // Step 5: Reranking (if available)
   if (config.search.reranking.enabled && isRerankerAvailable()) {
     const rerankStart = Date.now();
     const topCandidates = candidates.slice(0, config.search.reranking.candidateCount);
@@ -101,12 +140,12 @@ export async function search(request: SearchRequest): Promise<SearchResponse> {
     timings.rerankMs = Date.now() - rerankStart;
   }
 
-  // Step 5: Temporal decay
+  // Step 6: Temporal decay
   if (config.search.temporalDecay.enabled) {
     candidates = applyTemporalDecay(candidates);
   }
 
-  // Step 6: MMR diversity
+  // Step 7: MMR diversity
   let results: ScoredChunk[];
   if (config.search.mmr.enabled) {
     results = applyMMR(candidates, maxResults);
@@ -114,7 +153,7 @@ export async function search(request: SearchRequest): Promise<SearchResponse> {
     results = candidates.slice(0, maxResults);
   }
 
-  // Step 7: Normalize scores to [0, 1] range
+  // Step 8: Normalize scores to [0, 1] range
   if (results.length > 0) {
     const maxScore = results[0].score; // Already sorted by score
     if (maxScore > 1) {
@@ -122,12 +161,12 @@ export async function search(request: SearchRequest): Promise<SearchResponse> {
     }
   }
 
-  // Step 8: Min score filter
+  // Step 9: Min score filter
   if (request.minScore !== undefined) {
     results = results.filter(r => r.score >= request.minScore!);
   }
 
-  // Step 9: Build response
+  // Step 10: Build response
   const searchResults: SearchResult[] = results.map(chunk => {
     const fileContent = readFileContent(chunk.path);
     const snippet = extractSnippet(fileContent, chunk.startLine, chunk.endLine);
@@ -401,6 +440,17 @@ function jaccardSimilarity(text1: string, text2: string): number {
   const intersection = new Set([...tokens1].filter(x => tokens2.has(x)));
   const union = new Set([...tokens1, ...tokens2]);
   return intersection.size / union.size;
+}
+
+function cosineSimilarity(a: Float32Array, b: Float32Array): number {
+  let dot = 0, normA = 0, normB = 0;
+  for (let i = 0; i < a.length; i++) {
+    dot += a[i] * b[i];
+    normA += a[i] * a[i];
+    normB += b[i] * b[i];
+  }
+  const denom = Math.sqrt(normA) * Math.sqrt(normB);
+  return denom === 0 ? 0 : dot / denom;
 }
 
 // ============================================================================

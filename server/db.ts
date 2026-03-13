@@ -129,6 +129,36 @@ function createTables(db: Database): void {
     );
   `);
 
+  // Entity extraction tables (Feature 3)
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS chunk_entities (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      chunk_id INTEGER NOT NULL REFERENCES chunks(id) ON DELETE CASCADE,
+      type TEXT NOT NULL,
+      value TEXT NOT NULL,
+      confidence REAL DEFAULT 1.0
+    );
+  `);
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_chunk_entities_type_value ON chunk_entities(type, value)`);
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_chunk_entities_chunk ON chunk_entities(chunk_id)`);
+
+  // Knowledge graph tables (Feature 4)
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS graph_edges (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      entity1 TEXT NOT NULL,
+      entity1_type TEXT NOT NULL,
+      relation TEXT NOT NULL,
+      entity2 TEXT NOT NULL,
+      entity2_type TEXT NOT NULL,
+      source_chunk_id INTEGER REFERENCES chunks(id) ON DELETE CASCADE,
+      confidence REAL DEFAULT 1.0
+    );
+  `);
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_graph_entity1 ON graph_edges(entity1)`);
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_graph_entity2 ON graph_edges(entity2)`);
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_graph_relation ON graph_edges(relation)`);
+
   console.log("Database tables initialized");
 }
 
@@ -306,6 +336,99 @@ export function setCachedEmbedding(textHash: string, model: string, embedding: F
     VALUES (?, ?, ?)
   `);
   stmt.run(textHash, model, Buffer.from(embedding.buffer));
+}
+
+// Entity operations (Feature 3)
+export function insertEntities(chunkId: number, entities: Array<{type: string; value: string; confidence: number}>): void {
+  if (entities.length === 0) return;
+  
+  const stmt = db!.prepare(`
+    INSERT INTO chunk_entities (chunk_id, type, value, confidence)
+    VALUES (?, ?, ?, ?)
+  `);
+  
+  for (const entity of entities) {
+    stmt.run(chunkId, entity.type, entity.value, entity.confidence);
+  }
+}
+
+export function getEntities(chunkId: number): Array<{type: string; value: string; confidence: number}> {
+  const stmt = db!.prepare("SELECT type, value, confidence FROM chunk_entities WHERE chunk_id = ?");
+  return stmt.all(chunkId) as Array<{type: string; value: string; confidence: number}>;
+}
+
+export function searchByEntity(type: string, value: string): Array<{chunkId: number}> {
+  const stmt = db!.prepare(`
+    SELECT DISTINCT chunk_id as chunkId 
+    FROM chunk_entities 
+    WHERE type = ? AND LOWER(value) = LOWER(?)
+  `);
+  return stmt.all(type, value) as Array<{chunkId: number}>;
+}
+
+// Graph operations (Feature 4)
+export function insertRelationships(relationships: Array<{
+  entity1: string;
+  entity1Type: string;
+  relation: string;
+  entity2: string;
+  entity2Type: string;
+  sourceChunkId: number;
+  confidence: number;
+}>): void {
+  if (relationships.length === 0) return;
+  
+  const stmt = db!.prepare(`
+    INSERT INTO graph_edges (entity1, entity1_type, relation, entity2, entity2_type, source_chunk_id, confidence)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
+  `);
+  
+  for (const rel of relationships) {
+    stmt.run(
+      rel.entity1,
+      rel.entity1Type,
+      rel.relation,
+      rel.entity2,
+      rel.entity2Type,
+      rel.sourceChunkId,
+      rel.confidence
+    );
+  }
+}
+
+export function queryGraph(entity: string, depth: number): Array<{
+  entity1: string;
+  entity1_type: string;
+  relation: string;
+  entity2: string;
+  entity2_type: string;
+  source_chunk_id: number;
+}> {
+  // Simple depth traversal: collect all edges connected to the entity
+  // For depth > 1, we'd need recursive queries (simplified here)
+  
+  const stmt = db!.prepare(`
+    SELECT entity1, entity1_type, relation, entity2, entity2_type, source_chunk_id
+    FROM graph_edges
+    WHERE LOWER(entity1) = LOWER(?) OR LOWER(entity2) = LOWER(?)
+  `);
+  
+  return stmt.all(entity, entity) as Array<{
+    entity1: string;
+    entity1_type: string;
+    relation: string;
+    entity2: string;
+    entity2_type: string;
+    source_chunk_id: number;
+  }>;
+}
+
+export function deleteEntities(chunkId: number): void {
+  db!.prepare("DELETE FROM chunk_entities WHERE chunk_id = ?").run(chunkId);
+}
+
+export function deleteRelationships(chunkId: number): void {
+  db!.prepare("DELETE FROM graph_edges WHERE source_chunk_id = ?").run(chunkId);
 }
 
 // Stats
