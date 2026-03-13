@@ -6,10 +6,7 @@
     "chatModel": "qwen2.5-1.5b-instruct-mlx"
   },
   "reranker": {
-    "mode": "lmstudio",
-    "lmstudio": {
-      "model": "qwen2.5-1.5b-instruct-mlx"
-    }
+    "mode": "none"
   },
   "collections": [
     {
@@ -78,7 +75,7 @@
       "halfLifeDays": 30
     },
     "reranking": {
-      "enabled": true,
+      "enabled": false,
       "candidateCount": 15
     },
     "queryExpansion": {
