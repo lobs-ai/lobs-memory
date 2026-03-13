@@ -3,7 +3,7 @@
   "lmstudio": {
     "baseUrl": "http://localhost:1234/v1",
     "embeddingModel": "text-embedding-nomic-embed-text-v1.5",
-    "chatModel": "qwen/qwen3.5-9b"
+    "chatModel": "qwen2.5-1.5b-instruct-mlx"
   },
   "reranker": {
     "mode": "none"

@@ -86,22 +86,9 @@ function templateExpand(query: string): ExpandedQuery[] {
     results.push({ type: 'lex', text: synonymExpansion });
   }
 
-  // Vec variant: rephrase as a question if it isn't one already
-  if (!query.includes('?')) {
-    const questionForm = toQuestion(query, contentWords);
-    if (questionForm && questionForm.toLowerCase() !== query.toLowerCase()) {
-      results.push({ type: 'vec', text: questionForm });
-    }
-  }
-
-  // Vec variant: rephrase as a statement if it's a question
-  if (query.includes('?') || query.toLowerCase().startsWith('what') || 
-      query.toLowerCase().startsWith('how') || query.toLowerCase().startsWith('where')) {
-    const statement = toStatement(query, contentWords);
-    if (statement) {
-      results.push({ type: 'vec', text: statement });
-    }
-  }
+  // NOTE: No vec variants from templates — they just add ~500ms per embedding call
+  // for low-value rephrasings like "What is X?". HyDE from the LLM is the only
+  // vec expansion worth the cost. Template expansion stays lex-only (BM25 = instant).
 
   return results;
 }
@@ -184,11 +171,18 @@ function toStatement(query: string, contentWords: string[]): string | null {
  * Decide if we should use LLM for HyDE generation.
  * Only for queries where template expansion is insufficient.
  */
-function shouldUseLLM(_query: string): boolean {
-  // Disabled for now — LM Studio Qwen takes 7-20s per call which is too slow.
-  // Template expansion covers 80%+ of cases at 0ms cost.
-  // Re-enable when we have a faster local model or dedicated expansion model.
-  return false;
+function shouldUseLLM(query: string): boolean {
+  if (!config?.lmstudio?.chatModel) return false;
+
+  // Skip for very short queries (BM25 handles these fine)
+  const words = query.split(/\s+/);
+  if (words.length <= 2) return false;
+
+  // Skip for queries with code/path syntax (already specific)
+  if (query.includes('/') || query.includes('.') || query.includes('_')) return false;
+
+  // Use HyDE for natural language queries (3+ words)
+  return true;
 }
 
 /**
@@ -217,9 +211,9 @@ async function generateHyDE(query: string): Promise<ExpandedQuery | null> {
           { role: 'user', content: `/no_think\nWrite a 1-2 sentence document excerpt that answers: ${query}` },
           { role: 'assistant', content: 'Based on the notes:' },
         ],
-        max_tokens: 100,
+        max_tokens: 60,
         temperature: 0.3,
-        stop: ['\n\n'],
+        stop: ['\n\n', '\n'],
       }),
     });
 
