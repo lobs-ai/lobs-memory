@@ -1,41 +1,9 @@
 {
-  "id": "lobs-memory",
+  "id": "memory-lobs",
   "kind": "memory",
-  "name": "Lobs Memory",
-  "description": "HTTP-backed memory search with neural reranking and query expansion",
-  "version": "0.1.0",
   "configSchema": {
     "type": "object",
     "additionalProperties": false,
-    "properties": {
-      "serverUrl": {
-        "type": "string",
-        "default": "http://localhost:7420"
-      },
-      "enabled": {
-        "type": "boolean",
-        "default": true
-      },
-      "timeoutMs": {
-        "type": "number",
-        "default": 5000
-      },
-      "fallbackToBuiltin": {
-        "type": "boolean",
-        "default": true
-      }
-    }
-  },
-  "uiHints": {
-    "serverUrl": {
-      "label": "Server URL",
-      "placeholder": "http://localhost:7420"
-    },
-    "timeoutMs": {
-      "label": "Search timeout (ms)"
-    },
-    "fallbackToBuiltin": {
-      "label": "Fall back to builtin search if server is down"
-    }
+    "properties": {}
   }
 }
