@@ -75,56 +75,83 @@ export async function scoreRelevanceBatch(query: string, documents: string[]): P
     return [];
   }
 
+  const startTime = Date.now();
+  const timeoutMs = 1500; // 1.5s budget
+
   try {
-    // Build batched prompt - use a simpler single-score approach for models that don't follow instructions well
-    // Score each document individually (fallback approach)
+    // Build batched prompt with all documents
+    const docSnippets = documents.map((doc, i) => {
+      const snippet = doc.split(/\s+/).slice(0, 50).join(" "); // First ~50 words
+      return `Doc ${i + 1}: ${snippet}`;
+    });
+
+    const userPrompt = `Rate how relevant each document is to the query on a scale of 0-10. Reply with ONLY comma-separated numbers, one per document.
+
+Query: ${query}
+
+${docSnippets.join("\n\n")}`;
+
+    const url = `${state.config.lmstudio.baseUrl}/chat/completions`;
+    const response = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        model: state.config.reranker.lmstudio?.model || state.config.lmstudio.chatModel,
+        messages: [
+          { role: "user", content: userPrompt },
+          { role: "assistant", content: "Scores:" }, // Assistant prefill
+        ],
+        max_tokens: 50,
+        temperature: 0,
+        stop: ["\n\n"],
+      }),
+    });
+
+    const elapsed = Date.now() - startTime;
+
+    // Check timeout budget
+    if (elapsed > timeoutMs) {
+      console.warn(`⚠️  Reranker took ${elapsed}ms (> ${timeoutMs}ms budget), skipping reranking for this query`);
+      return documents.map(() => 0);
+    }
+
+    if (!response.ok) {
+      console.error(`Reranker API error: ${response.status}`);
+      return documents.map(() => 0);
+    }
+
+    const data = await response.json();
+    const content = data.choices[0]?.message?.content?.trim() || "";
+
+    // Parse comma-separated scores
+    const scoresText = content.replace(/^Scores:\s*/i, "").trim();
+    const scoreParts = scoresText.split(/[\s,]+/).filter(s => s.length > 0);
+
     const scores: number[] = [];
-    
     for (let i = 0; i < documents.length; i++) {
-      const doc = documents[i];
-      const words = doc.split(/\s+/).slice(0, 100).join(" ");
-      
-      const systemPrompt = "Output only a single number from 0 to 10. No words, no explanations.";
-      const userPrompt = `Rate relevance (0-10):\n\nQuery: "${query}"\nDocument: ${words}\n\nScore:`;
-
-      const url = `${state.config.lmstudio.baseUrl}/chat/completions`;
-      const response = await fetch(url, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          model: state.config.reranker.lmstudio?.model || state.config.lmstudio.chatModel,
-          messages: [
-            { role: "system", content: systemPrompt },
-            { role: "user", content: userPrompt },
-          ],
-          max_tokens: 5,
-          temperature: 0,
-        }),
-      });
-
-      if (!response.ok) {
-        console.error(`Reranker API error for doc ${i + 1}: ${response.status}`);
-        scores.push(0);
-        continue;
-      }
-
-      const data = await response.json();
-      const content = data.choices[0]?.message?.content?.trim() || "";
-      
-      // Extract first number from response
-      const match = content.match(/(\d+\.?\d*)/);
-      if (match) {
-        const score = parseFloat(match[1]);
-        scores.push(Math.min(10, Math.max(0, score))); // Clamp to [0, 10]
+      if (i < scoreParts.length) {
+        const match = scoreParts[i].match(/(\d+\.?\d*)/);
+        if (match) {
+          const score = parseFloat(match[1]);
+          scores.push(Math.min(10, Math.max(0, score))); // Clamp to [0, 10]
+        } else {
+          scores.push(0);
+        }
       } else {
-        console.warn(`Could not parse score from: "${content.slice(0, 50)}"`);
         scores.push(0);
       }
     }
 
+    console.log(`  Reranking: ${elapsed}ms for ${documents.length} docs`);
     return scores;
+
   } catch (err) {
-    console.error("Reranking error:", err);
+    const elapsed = Date.now() - startTime;
+    if (elapsed > timeoutMs) {
+      console.warn(`⚠️  Reranker timeout (${elapsed}ms), skipping reranking`);
+    } else {
+      console.error("Reranking error:", err);
+    }
     return documents.map(() => 0);
   }
 }

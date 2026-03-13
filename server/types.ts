@@ -47,6 +47,7 @@ export interface ChunkingConfig {
 export interface IndexingConfig {
   debounceMs: number;
   watchEnabled: boolean;
+  syncIntervalMs?: number;  // Background periodic sync interval (default 60000)
 }
 
 // Search request/response types (what the plugin sends/receives)

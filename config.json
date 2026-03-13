@@ -6,7 +6,10 @@
     "chatModel": "qwen2.5-1.5b-instruct-mlx"
   },
   "reranker": {
-    "mode": "none"
+    "mode": "lmstudio",
+    "lmstudio": {
+      "model": "qwen2.5-1.5b-instruct-mlx"
+    }
   },
   "collections": [
     {
@@ -18,6 +21,47 @@
       "name": "knowledge",
       "path": "~/lobs-shared-memory",
       "pattern": "**/*.md"
+    },
+    {
+      "name": "sessions",
+      "path": "~/.openclaw/agents/main/sessions",
+      "pattern": "*.jsonl"
+    },
+    {
+      "name": "projects",
+      "path": "~/paw-hub",
+      "pattern": "**/*.md",
+      "exclude": ["node_modules/**", ".git/**", "dist/**", "build/**"]
+    },
+    {
+      "name": "projects",
+      "path": "~/lobs/lobs-nexus",
+      "pattern": "**/*.md",
+      "exclude": ["node_modules/**", ".git/**", "dist/**", "build/**"]
+    },
+    {
+      "name": "projects",
+      "path": "~/lobs/lobs-core",
+      "pattern": "**/*.md",
+      "exclude": ["node_modules/**", ".git/**", "dist/**", "build/**"]
+    },
+    {
+      "name": "projects",
+      "path": "~/lobs-memory",
+      "pattern": "**/*.md",
+      "exclude": ["node_modules/**", ".git/**", "dist/**", "build/**"]
+    },
+    {
+      "name": "projects",
+      "path": "~/paw-designs",
+      "pattern": "**/*.md",
+      "exclude": ["node_modules/**", ".git/**", "dist/**", "build/**"]
+    },
+    {
+      "name": "projects",
+      "path": "~/bot-shared",
+      "pattern": "**/*.md",
+      "exclude": ["node_modules/**", ".git/**", "dist/**", "build/**"]
     }
   ],
   "search": {
@@ -34,8 +78,8 @@
       "halfLifeDays": 30
     },
     "reranking": {
-      "enabled": false,
-      "candidateCount": 20
+      "enabled": true,
+      "candidateCount": 15
     },
     "queryExpansion": {
       "enabled": true,
@@ -48,6 +92,7 @@
   },
   "indexing": {
     "debounceMs": 2000,
-    "watchEnabled": true
+    "watchEnabled": true,
+    "syncIntervalMs": 60000
   }
 }

@@ -3,7 +3,7 @@
  */
 
 import { watch } from "chokidar";
-import { readFileSync, statSync } from "fs";
+import { readFileSync, statSync, existsSync } from "fs";
 import { createHash } from "crypto";
 import { join, relative } from "path";
 import { glob } from "glob";
@@ -16,10 +16,12 @@ import {
   insertEmbeddings,
   getCachedEmbedding,
   setCachedEmbedding,
+  getDb,
 } from "./db.js";
 import { chunkMarkdown } from "./chunker.js";
 import { embedBatch } from "./embedder.js";
 import { clearFileCache } from "./search.js";
+import { parseFile } from "./parsers.js";
 import type { Config, Collection } from "./types.js";
 
 interface IndexerState {
@@ -28,6 +30,7 @@ interface IndexerState {
   isIndexing: boolean;
   isPaused: boolean;
   pendingFiles: Set<string>;
+  syncIntervalHandle: Timer | null;
 }
 
 const state: IndexerState = {
@@ -36,6 +39,7 @@ const state: IndexerState = {
   isIndexing: false,
   isPaused: false,
   pendingFiles: new Set(),
+  syncIntervalHandle: null,
 };
 
 /**
@@ -44,61 +48,119 @@ const state: IndexerState = {
 export async function startIndexer(config: Config): Promise<void> {
   state.config = config;
 
-  console.log("Starting initial index scan...");
-  await indexAllCollections();
+  console.log("Starting incremental index sync...");
+  await incrementalSyncAllCollections();
 
   if (config.indexing.watchEnabled) {
     console.log("Starting file watchers...");
     startWatchers();
   }
 
+  // Start background periodic sync
+  const syncIntervalMs = (config.indexing as any).syncIntervalMs || 60000; // Default 60s
+  console.log(`Starting background sync (interval: ${syncIntervalMs}ms)`);
+  state.syncIntervalHandle = setInterval(async () => {
+    if (!state.isPaused && !state.isIndexing) {
+      await incrementalSyncAllCollections();
+    }
+  }, syncIntervalMs);
+
   console.log("Indexer ready");
 }
 
 /**
- * Index all configured collections
+ * Incremental sync for all collections (only re-index changed/new files)
  */
-async function indexAllCollections(): Promise<void> {
+async function incrementalSyncAllCollections(): Promise<void> {
   if (!state.config) return;
 
   for (const collection of state.config.collections) {
-    await indexCollection(collection);
+    await incrementalSyncCollection(collection);
   }
 }
 
 /**
- * Index a single collection
+ * Incremental sync for a single collection
  */
-async function indexCollection(collection: Collection): Promise<void> {
+async function incrementalSyncCollection(collection: Collection): Promise<void> {
   if (!state.config) return;
 
   const startTime = Date.now();
-  console.log(`Indexing collection: ${collection.name} (${collection.path})`);
+  console.log(`Syncing collection: ${collection.name} (${collection.path})`);
 
-  // Find all matching files
+  // Find all matching files on disk
   const patterns = Array.isArray(collection.pattern) ? collection.pattern : [collection.pattern];
-  const files: string[] = [];
+  const diskFiles = new Set<string>();
 
   for (const pattern of patterns) {
     const matches = await glob(pattern, {
       cwd: collection.path,
       absolute: true,
       nodir: true,
+      ignore: (collection as any).exclude || ["node_modules/**", ".git/**", "dist/**", "build/**"],
     });
-    files.push(...matches);
+    matches.forEach(f => diskFiles.add(f));
   }
 
-  console.log(`Found ${files.length} files in ${collection.name}`);
+  // Get existing documents from DB for this collection
+  const db = getDb();
+  const existingDocs = db.prepare("SELECT path, hash, mtime FROM documents WHERE collection = ?")
+    .all(collection.name) as Array<{ path: string; hash: string; mtime: number }>;
+  
+  const existingPaths = new Set(existingDocs.map(d => d.path));
+  const existingByPath = new Map(existingDocs.map(d => [d.path, d]));
 
-  // Index each file
+  // Calculate what needs to be done
+  const toIndex: string[] = [];
+  const toDelete: string[] = [];
+
+  // Check files on disk
+  for (const path of diskFiles) {
+    const existing = existingByPath.get(path);
+    if (!existing) {
+      // New file
+      toIndex.push(path);
+    } else {
+      // Check if changed (compare hash/mtime)
+      try {
+        const stats = statSync(path);
+        const content = readFileSync(path, "utf-8");
+        const hash = createHash("sha256").update(content).digest("hex");
+        
+        if (hash !== existing.hash || stats.mtimeMs !== existing.mtime) {
+          toIndex.push(path);
+        }
+      } catch (err) {
+        console.error(`Error checking ${path}:`, err);
+      }
+    }
+  }
+
+  // Check for deleted files
+  for (const path of existingPaths) {
+    if (!diskFiles.has(path)) {
+      toDelete.push(path);
+    }
+  }
+
+  // Perform incremental updates
   let indexed = 0;
-  for (const file of files) {
-    const changed = await indexFile(file, collection.name);
+  for (const path of toIndex) {
+    const changed = await indexFile(path, collection.name);
     if (changed) indexed++;
   }
 
+  for (const path of toDelete) {
+    deleteDocument(path);
+    clearFileCache(path);
+  }
+
+  const skipped = diskFiles.size - toIndex.length;
   const elapsed = Date.now() - startTime;
-  console.log(`Collection ${collection.name}: ${indexed}/${files.length} files indexed in ${elapsed}ms`);
+  
+  console.log(
+    `Incremental sync (${collection.name}): ${toIndex.length} new/changed, ${toDelete.length} deleted (skipped ${skipped} unchanged) — ${elapsed}ms`
+  );
 }
 
 /**
@@ -111,8 +173,8 @@ async function indexFile(path: string, collectionName: string): Promise<boolean>
   try {
     // Check if file has changed
     const stats = statSync(path);
-    const content = readFileSync(path, "utf-8");
-    const hash = createHash("sha256").update(content).digest("hex");
+    const rawContent = readFileSync(path, "utf-8");
+    const hash = createHash("sha256").update(rawContent).digest("hex");
 
     const existing = getDocument(path);
     if (existing && existing.hash === hash && existing.mtime === stats.mtimeMs) {
@@ -122,6 +184,10 @@ async function indexFile(path: string, collectionName: string): Promise<boolean>
 
     const relPath = path.replace(process.env.HOME || "", "~");
     console.log(`Indexing: ${relPath}`);
+
+    // Parse file content (handles .jsonl and other formats)
+    const parsed = parseFile(rawContent, path);
+    const content = parsed.text;
 
     // Upsert document
     const docId = upsertDocument({
@@ -155,7 +221,7 @@ async function indexFile(path: string, collectionName: string): Promise<boolean>
     // Get chunk IDs (query back from DB)
     const insertedChunks = await getInsertedChunks(docId);
 
-    // Embed chunks (with caching)
+    // Embed chunks (with caching by text hash)
     const modelName = state.config.lmstudio.embeddingModel;
     const textsToEmbed: string[] = [];
     const chunkIndices: number[] = [];
@@ -166,7 +232,7 @@ async function indexFile(path: string, collectionName: string): Promise<boolean>
       const cached = getCachedEmbedding(textHash, modelName);
 
       if (cached) {
-        // Use cached embedding
+        // Use cached embedding (reuses embeddings even across changed documents)
         insertEmbeddings(chunk.id!, cached);
       } else {
         // Need to embed
@@ -292,19 +358,26 @@ export async function resumeIndexing(): Promise<void> {
 }
 
 /**
- * Manually trigger re-index of all collections
+ * Manually trigger re-sync of all collections
  */
 export async function reindexAll(): Promise<void> {
-  console.log("Manual re-index triggered");
-  await indexAllCollections();
+  console.log("Manual re-sync triggered");
+  await incrementalSyncAllCollections();
 }
 
 /**
- * Stop all watchers
+ * Stop all watchers and background sync
  */
 export async function stopIndexer(): Promise<void> {
   console.log("Stopping indexer...");
 
+  // Stop background sync
+  if (state.syncIntervalHandle) {
+    clearInterval(state.syncIntervalHandle);
+    state.syncIntervalHandle = null;
+  }
+
+  // Stop file watchers
   for (const [name, watcher] of state.watchers) {
     await watcher.close();
     console.log(`Stopped watcher: ${name}`);

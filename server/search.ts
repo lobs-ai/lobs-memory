@@ -15,6 +15,7 @@ import { extractSnippet, createCitation } from "./chunker.js";
 import { expandQuery, initExpander } from "./expander.js";
 import { readFileSync } from "fs";
 import type { Config, SearchRequest, SearchResponse, SearchResult, ScoredChunk } from "./types.js";
+import { parseFile } from "./parsers.js";
 
 let config: Config | null = null;
 
@@ -411,7 +412,12 @@ const fileCache = new Map<string, string>();
 function readFileContent(path: string): string {
   if (fileCache.has(path)) return fileCache.get(path)!;
   try {
-    const content = readFileSync(path, "utf-8");
+    const raw = readFileSync(path, "utf-8");
+    // For JSONL files, parse through the session parser so snippets show human-readable text
+    let content = raw;
+    if (path.endsWith(".jsonl")) {
+      content = parseFile(raw, path).text;
+    }
     fileCache.set(path, content);
     return content;
   } catch {
