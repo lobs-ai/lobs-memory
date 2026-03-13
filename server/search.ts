@@ -368,15 +368,18 @@ function mergeAdditionalVector(
 async function rerankCandidates(query: string, candidates: ScoredChunk[]): Promise<ScoredChunk[]> {
   const documents = candidates.map(c => c.text);
   const rerankScores = await scoreRelevanceBatch(query, documents);
-  const normalizedScores = rerankScores.map(s => s / 10);
 
-  // Blend: 60% reranker + 40% original score (don't fully replace)
+  // Normalize cross-encoder logits to [0, 1] using sigmoid
+  const sigmoid = (x: number) => 1 / (1 + Math.exp(-x));
+  const normalizedScores = rerankScores.map(s => sigmoid(s));
+
+  // Blend: 60% reranker + 40% original score
   const reranked = candidates.map((chunk, i) => ({
     ...chunk,
     rerankScore: normalizedScores[i],
-    score: normalizedScores[i] > 0 
+    score: rerankScores[i] !== 0
       ? 0.6 * normalizedScores[i] + 0.4 * chunk.score
-      : chunk.score, // If reranker returned 0, keep original
+      : chunk.score, // If reranker returned 0, keep original (sidecar unavailable)
   }));
 
   reranked.sort((a, b) => b.score - a.score);

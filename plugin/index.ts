@@ -15,6 +15,7 @@ const LOBS_MEMORY_URL = `http://localhost:${LOBS_MEMORY_PORT}`;
 const SERVER_DIR = resolve(import.meta.dirname || __dirname, "..");
 
 let serverProcess: ChildProcess | null = null;
+let rerankerProcess: ChildProcess | null = null;
 
 const memoryLobsPlugin = {
   id: "memory-lobs",
@@ -185,6 +186,26 @@ const memoryLobsPlugin = {
     api.registerService({
       id: "lobs-memory-server",
       start: () => {
+        // Start reranker sidecar first (server will check for it on init)
+        log.info("lobs-memory: starting reranker sidecar...");
+        rerankerProcess = spawn("python3", [resolve(SERVER_DIR, "scripts/reranker-server.py")], {
+          cwd: SERVER_DIR,
+          stdio: ["ignore", "pipe", "pipe"],
+          env: { ...process.env },
+        });
+        rerankerProcess.stdout?.on("data", (data: Buffer) => {
+          const msg = data.toString().trim();
+          if (msg) log.info(`reranker: ${msg}`);
+        });
+        rerankerProcess.stderr?.on("data", (data: Buffer) => {
+          const msg = data.toString().trim();
+          if (msg && !msg.includes("UserWarning")) log.warn(`reranker: ${msg}`);
+        });
+        rerankerProcess.on("exit", (code) => {
+          if (code !== 0) log.warn(`reranker: sidecar exited (code=${code})`);
+          rerankerProcess = null;
+        });
+
         log.info("lobs-memory: starting server...");
 
         serverProcess = spawn("bun", ["run", "server/index.ts"], {
@@ -224,6 +245,11 @@ const memoryLobsPlugin = {
           log.info("lobs-memory: stopping server...");
           serverProcess.kill("SIGTERM");
           serverProcess = null;
+        }
+        if (rerankerProcess) {
+          log.info("lobs-memory: stopping reranker...");
+          rerankerProcess.kill("SIGTERM");
+          rerankerProcess = null;
         }
       },
     });

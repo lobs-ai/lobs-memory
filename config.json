@@ -6,7 +6,7 @@
     "chatModel": "qwen2.5-1.5b-instruct-mlx"
   },
   "reranker": {
-    "mode": "none"
+    "mode": "onnx-sidecar"
   },
   "collections": [
     {
@@ -25,10 +25,31 @@
       "pattern": "*.jsonl"
     },
     {
+      "name": "openclaw-docs",
+      "path": "~/lobs-shared-memory/openclaw-docs",
+      "pattern": "**/*.md"
+    },
+    {
+      "name": "github-prs",
+      "path": "~/lobs-shared-memory/github-prs",
+      "pattern": "**/*.md"
+    },
+    {
+      "name": "research",
+      "path": "~/lobs-shared-memory/research",
+      "pattern": "**/*.md"
+    },
+    {
       "name": "projects",
       "path": "~/paw-hub",
       "pattern": "**/*.md",
       "exclude": ["node_modules/**", ".git/**", "dist/**", "build/**"]
+    },
+    {
+      "name": "projects",
+      "path": "~/lobs-mobile",
+      "pattern": "**/*.md",
+      "exclude": ["node_modules/**", ".git/**", "dist/**", "build/**", "Pods/**", ".build/**"]
     },
     {
       "name": "projects",
@@ -75,7 +96,7 @@
       "halfLifeDays": 30
     },
     "reranking": {
-      "enabled": false,
+      "enabled": true,
       "candidateCount": 15
     },
     "queryExpansion": {
