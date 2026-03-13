@@ -25,21 +25,6 @@
       "pattern": "*.jsonl"
     },
     {
-      "name": "openclaw-docs",
-      "path": "~/lobs-shared-memory/openclaw-docs",
-      "pattern": "**/*.md"
-    },
-    {
-      "name": "github-prs",
-      "path": "~/lobs-shared-memory/github-prs",
-      "pattern": "**/*.md"
-    },
-    {
-      "name": "research",
-      "path": "~/lobs-shared-memory/research",
-      "pattern": "**/*.md"
-    },
-    {
       "name": "projects",
       "path": "~/paw-hub",
       "pattern": "**/*.md",

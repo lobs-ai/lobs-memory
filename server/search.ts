@@ -133,7 +133,7 @@ export async function search(request: SearchRequest): Promise<SearchResponse> {
   }
 
   // Step 5: Reranking (if available)
-  if (config.search.reranking.enabled && isRerankerAvailable()) {
+  if (config.search.reranking.enabled && (isRerankerAvailable() || config.reranker?.mode === "onnx-sidecar")) {
     const rerankStart = Date.now();
     const topCandidates = candidates.slice(0, config.search.reranking.candidateCount);
     candidates = await rerankCandidates(request.query, topCandidates);
