@@ -132,12 +132,20 @@ export async function search(request: SearchRequest): Promise<SearchResponse> {
     candidates = candidates.filter(c => request.collections!.includes(c.collection));
   }
 
-  // Step 5: Reranking (if available)
+  // Step 5: Reranking — only when top scores are close (worth reordering)
   if (config.search.reranking.enabled && (isRerankerAvailable() || config.reranker?.mode === "onnx-sidecar")) {
-    const rerankStart = Date.now();
     const topCandidates = candidates.slice(0, config.search.reranking.candidateCount);
-    candidates = await rerankCandidates(request.query, topCandidates);
-    timings.rerankMs = Date.now() - rerankStart;
+    // Skip reranking if top result is already dominant (>0.15 gap to #2)
+    const scoreDiff = topCandidates.length >= 2
+      ? topCandidates[0].score - topCandidates[1].score
+      : 1;
+    if (scoreDiff < 0.15) {
+      const rerankStart = Date.now();
+      candidates = await rerankCandidates(request.query, topCandidates);
+      timings.rerankMs = Date.now() - rerankStart;
+    } else {
+      console.log(`  Reranking skipped (top score dominant: ${topCandidates[0].score.toFixed(3)} vs ${topCandidates[1]?.score.toFixed(3)}, gap=${scoreDiff.toFixed(3)})`);
+    }
   }
 
   // Step 6: Temporal decay
