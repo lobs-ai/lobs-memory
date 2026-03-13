@@ -38,7 +38,15 @@ const memoryLobsPlugin = {
       if (ctx.agentId && ctx.agentId !== "main") return {};
 
       // Log what we're seeing
-      log.info(`memory-inject: hook fired! trigger=${ctx.trigger} agentId=${ctx.agentId} msgCount=${event.messages.length}`);
+      const msgCount = event.messages.length;
+      log.info(`memory-inject: hook fired! trigger=${ctx.trigger} agentId=${ctx.agentId} msgCount=${msgCount}`);
+
+      // Skip injection in long conversations — context is already rich
+      // Auto-injection is most valuable in fresh/short sessions
+      if (msgCount > 30) {
+        log.info("memory-inject: skipped (long conversation, context already rich)");
+        return {};
+      }
 
       // Only inject on direct user messages, not on heartbeats/cron/memory triggers
       if (ctx.trigger && ctx.trigger !== "user") {
