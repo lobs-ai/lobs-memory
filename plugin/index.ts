@@ -127,11 +127,11 @@ const memoryLobsPlugin = {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             query,
-            maxResults: 5,
-            minScore: 0.5,
+            maxResults: 3,
+            minScore: 0.65,
             conversationContext,
           }),
-          signal: AbortSignal.timeout(5000),
+          signal: AbortSignal.timeout(3000),
         });
 
         if (!response.ok) {
@@ -141,6 +141,18 @@ const memoryLobsPlugin = {
 
         const data = await response.json();
         if (!data.results || data.results.length === 0) return {};
+
+        // Filter out files already in workspace context (always loaded by OpenClaw)
+        const WORKSPACE_FILES = new Set([
+          "MEMORY.md", "SOUL.md", "USER.md", "AGENTS.md", "TOOLS.md", 
+          "IDENTITY.md", "HEARTBEAT.md", "BOOTSTRAP.md",
+        ]);
+        data.results = data.results.filter((r: any) => {
+          const filename = r.path.split("/").pop();
+          return !WORKSPACE_FILES.has(filename);
+        });
+
+        if (data.results.length === 0) return {};
 
         // Cache results
         injectionCache.set(query, { results: data.results, timestamp: Date.now() });
