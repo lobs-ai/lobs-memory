@@ -54,10 +54,25 @@ const memoryLobsPlugin = {
       }
       if (!lastUserMsg) return {};
 
-      log.info(`memory-inject: found user msg: "${(typeof lastUserMsg.content === "string" ? lastUserMsg.content : "[complex]").slice(0, 80)}"`);
+      // Extract text from user message (handles string, array of parts, or complex formats)
+      let msgText = "";
+      if (typeof lastUserMsg.content === "string") {
+        msgText = lastUserMsg.content;
+      } else if (Array.isArray(lastUserMsg.content)) {
+        msgText = lastUserMsg.content
+          .filter((p: any) => p.type === "text" || typeof p === "string")
+          .map((p: any) => typeof p === "string" ? p : p.text || "")
+          .join(" ");
+      }
+
+      // Strip Discord/channel metadata envelope to get the actual user message
+      // Format: "Conversation info (untrusted metadata):\n```json\n{...}\n```\n\nSender...\n```json\n{...}\n```\n\nACTUAL MESSAGE"
+      msgText = stripChannelEnvelope(msgText);
+
+      log.info(`memory-inject: user msg: "${msgText.slice(0, 80)}"`);
 
       // Skip system/inter-session messages
-      const content = typeof lastUserMsg.content === "string" ? lastUserMsg.content : "";
+      const content = msgText;
       if (content.startsWith("[Inter-session message]") || content.startsWith("[System")) {
         log.info("memory-inject: skipped (system/inter-session)");
         return {};
@@ -68,9 +83,18 @@ const memoryLobsPlugin = {
       for (let i = event.messages.length - 1; i >= 0 && recentUserMessages.length < 3; i--) {
         const msg = event.messages[i] as any;
         if (msg.role === "user") {
-          const msgContent = typeof msg.content === "string" ? msg.content : "";
-          if (msgContent) {
-            recentUserMessages.unshift(msgContent);
+          let text = "";
+          if (typeof msg.content === "string") {
+            text = msg.content;
+          } else if (Array.isArray(msg.content)) {
+            text = msg.content
+              .filter((p: any) => p.type === "text" || typeof p === "string")
+              .map((p: any) => typeof p === "string" ? p : p.text || "")
+              .join(" ");
+          }
+          text = stripChannelEnvelope(text);
+          if (text && text.length > 0) {
+            recentUserMessages.unshift(text);
           }
         }
       }
@@ -107,7 +131,7 @@ const memoryLobsPlugin = {
             minScore: 0.5,
             conversationContext,
           }),
-          signal: AbortSignal.timeout(3000),
+          signal: AbortSignal.timeout(5000),
         });
 
         if (!response.ok) {
@@ -132,11 +156,7 @@ const memoryLobsPlugin = {
 
         return { prependContext: formatContextBlock(data.results) };
       } catch (err: any) {
-        if (err?.name === "TimeoutError" || err?.code === "ECONNREFUSED") {
-          log.warn("memory-inject: search timeout/unavailable, skipping");
-        } else {
-          log.warn(`memory-inject: error: ${err.message}`);
-        }
+        log.warn(`memory-inject: error: ${err?.name || "unknown"} — ${err?.message || String(err)}`);
         return {};
       }
     });
@@ -344,6 +364,51 @@ const memoryLobsPlugin = {
 };
 
 // ── Helper functions for auto-injection ────────────────────────────
+
+/**
+ * Strip channel metadata envelope from user messages.
+ * Discord/Telegram messages arrive wrapped in "Conversation info" + "Sender" blocks.
+ * We want just the actual user text.
+ */
+function stripChannelEnvelope(text: string): string {
+  if (!text) return text;
+  
+  // Pattern: everything after the last ``` block from the metadata envelope
+  // The actual message follows the Sender metadata block
+  if (text.includes("Conversation info (untrusted metadata)")) {
+    // Find the end of the last ```json ... ``` block
+    const parts = text.split("```");
+    if (parts.length >= 5) {
+      // After Conversation info block (2 ```) and Sender block (2 more ```)
+      // the actual message is the last part
+      const lastPart = parts[parts.length - 1].trim();
+      if (lastPart) return lastPart;
+    }
+    // Fallback: take everything after the last "```\n\n"
+    const lastFence = text.lastIndexOf("```");
+    if (lastFence > 0) {
+      const after = text.slice(lastFence + 3).trim();
+      if (after) return after;
+    }
+  }
+
+  // Strip [Inter-session message] prefix
+  if (text.startsWith("[Inter-session message]")) {
+    return "";
+  }
+  
+  // Strip system messages
+  if (text.startsWith("System:") || text.startsWith("[System")) {
+    return "";
+  }
+
+  // Strip heartbeat prompt
+  if (text.includes("Read HEARTBEAT.md if it exists")) {
+    return "";
+  }
+
+  return text;
+}
 
 /**
  * Check if a message is too trivial to warrant memory search
