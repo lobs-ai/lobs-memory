@@ -135,11 +135,11 @@ export async function search(request: SearchRequest): Promise<SearchResponse> {
   // Step 5: Reranking — only when top scores are close (worth reordering)
   if (config.search.reranking.enabled && (isRerankerAvailable() || config.reranker?.mode === "onnx-sidecar")) {
     const topCandidates = candidates.slice(0, config.search.reranking.candidateCount);
-    // Skip reranking if top result is already dominant (>0.15 gap to #2)
+    // Skip reranking if top result is already dominant (>0.08 gap to #2)
     const scoreDiff = topCandidates.length >= 2
       ? topCandidates[0].score - topCandidates[1].score
       : 1;
-    if (scoreDiff < 0.15) {
+    if (scoreDiff < 0.08) {
       const rerankStart = Date.now();
       candidates = await rerankCandidates(request.query, topCandidates);
       timings.rerankMs = Date.now() - rerankStart;
