@@ -37,6 +37,7 @@ interface IndexerState {
   isPaused: boolean;
   pendingFiles: Set<string>;
   syncIntervalHandle: Timer | null;
+  embedderDownLogged: boolean;
 }
 
 const state: IndexerState = {
@@ -45,6 +46,7 @@ const state: IndexerState = {
   isIndexing: false,
   isPaused: false,
   pendingFiles: new Set(),
+  embedderDownLogged: false,
   syncIntervalHandle: null,
 };
 
@@ -267,21 +269,30 @@ async function indexFile(path: string, collectionName: string): Promise<boolean>
       }
     }
 
-    // Batch embed uncached chunks
+    // Batch embed uncached chunks (gracefully skip if embedder is down)
     if (textsToEmbed.length > 0) {
-      const embeddings = await embedBatch(textsToEmbed);
+      try {
+        const embeddings = await embedBatch(textsToEmbed);
 
-      for (let i = 0; i < embeddings.length; i++) {
-        const embedding = embeddings[i];
-        const chunkIdx = chunkIndices[i];
-        const chunk = insertedChunks[chunkIdx];
-        const textHash = createHash("sha256").update(chunk.text).digest("hex");
+        for (let i = 0; i < embeddings.length; i++) {
+          const embedding = embeddings[i];
+          const chunkIdx = chunkIndices[i];
+          const chunk = insertedChunks[chunkIdx];
+          const textHash = createHash("sha256").update(chunk.text).digest("hex");
 
-        // Store in vector index
-        insertEmbeddings(chunk.id!, embedding);
+          // Store in vector index
+          insertEmbeddings(chunk.id!, embedding);
 
-        // Cache embedding
-        setCachedEmbedding(textHash, modelName, embedding);
+          // Cache embedding
+          setCachedEmbedding(textHash, modelName, embedding);
+        }
+      } catch (err) {
+        // Embedder is down — log once and continue without embeddings
+        // BM25 search + entity extraction still work fine
+        if (!state.embedderDownLogged) {
+          console.warn(`[indexer] Embedder unavailable — indexing without vector embeddings. BM25 search still works. (${err instanceof Error ? err.message : err})`);
+          state.embedderDownLogged = true;
+        }
       }
     }
 

@@ -9,7 +9,28 @@
  */
 
 import { bm25Search, vectorSearch, getDb } from "./db.js";
-import { embed, embedQuery } from "./embedder.js";
+import { embed, embedQuery, checkEmbedderHealth } from "./embedder.js";
+
+/** Cached embedder availability — refreshed periodically */
+let embedderAvailable = false;
+let lastEmbedderCheck = 0;
+const EMBEDDER_CHECK_INTERVAL = 30_000; // 30s
+
+async function isEmbedderUp(): Promise<boolean> {
+  const now = Date.now();
+  if (now - lastEmbedderCheck > EMBEDDER_CHECK_INTERVAL) {
+    const health = await checkEmbedderHealth();
+    embedderAvailable = health.available;
+    lastEmbedderCheck = now;
+  }
+  return embedderAvailable;
+}
+
+/** Force-refresh embedder status (call after startup or config change) */
+export function resetEmbedderCache(): void {
+  lastEmbedderCheck = 0;
+  embedderAvailable = false;
+}
 import { scoreRelevanceBatch, isRerankerAvailable } from "./reranker.js";
 import { extractSnippet, createCitation } from "./chunker.js";
 import { expandQuery, initExpander } from "./expander.js";
@@ -46,41 +67,56 @@ export async function search(request: SearchRequest): Promise<SearchResponse> {
   const bm25Results = bm25Search(request.query, candidateCount);
   timings.bm25Ms = Date.now() - bm25Start;
 
-  const vectorStart = Date.now();
-  const queryEmbedding = await embedQuery(request.query);
-  const vectorResults = vectorSearch(queryEmbedding, candidateCount);
-  timings.vectorMs = Date.now() - vectorStart;
+  // Vector search — gracefully degrade to BM25-only if embedder is down
+  const canVector = await isEmbedderUp();
+  let vectorResults: Array<{ chunkId: number; distance: number }> = [];
+  if (canVector) {
+    try {
+      const vectorStart = Date.now();
+      const queryEmbedding = await embedQuery(request.query);
+      vectorResults = vectorSearch(queryEmbedding, candidateCount);
+      timings.vectorMs = Date.now() - vectorStart;
+    } catch {
+      // Embedder failed mid-request — mark as down, continue with BM25 only
+      embedderAvailable = false;
+      lastEmbedderCheck = Date.now();
+    }
+  }
 
-  // Weighted merge of BM25 + vector (this produces good 0.4-0.7 range scores)
+  // Weighted merge of BM25 + vector (or BM25-only if no vector results)
   let candidates = mergeCandidates(bm25Results, vectorResults);
 
-  // Feature 2: Conversation context biasing
-  if (request.conversationContext) {
-    const contextStart = Date.now();
-    const contextEmbedding = await embed(request.conversationContext);
-    
-    // Apply context bias to all candidates
-    candidates = candidates.map(chunk => {
-      // Get chunk embedding from DB
-      const db = getDb();
-      const embRow = db.prepare("SELECT embedding FROM chunk_embeddings WHERE chunk_id = ?")
-        .get(chunk.id!) as { embedding: Buffer } | undefined;
+  // Feature 2: Conversation context biasing (requires embedder)
+  if (request.conversationContext && canVector && vectorResults.length > 0) {
+    try {
+      const contextStart = Date.now();
+      const contextEmbedding = await embed(request.conversationContext);
       
-      if (embRow) {
-        const chunkEmbedding = new Float32Array(embRow.embedding.buffer, embRow.embedding.byteOffset, embRow.embedding.byteLength / 4);
-        const contextSim = cosineSimilarity(contextEmbedding, chunkEmbedding);
+      // Apply context bias to all candidates
+      candidates = candidates.map(chunk => {
+        // Get chunk embedding from DB
+        const db = getDb();
+        const embRow = db.prepare("SELECT embedding FROM chunk_embeddings WHERE chunk_id = ?")
+          .get(chunk.id!) as { embedding: Buffer } | undefined;
         
-        // Blend: 70% original score + 30% context similarity
-        const contextScore = (1 - ((1 - contextSim) / 2)); // Convert to 0-1 range
-        chunk.score = 0.7 * chunk.score + 0.3 * contextScore;
-      }
+        if (embRow) {
+          const chunkEmbedding = new Float32Array(embRow.embedding.buffer, embRow.embedding.byteOffset, embRow.embedding.byteLength / 4);
+          const contextSim = cosineSimilarity(contextEmbedding, chunkEmbedding);
+          
+          // Blend: 70% original score + 30% context similarity
+          const contextScore = (1 - ((1 - contextSim) / 2)); // Convert to 0-1 range
+          chunk.score = 0.7 * chunk.score + 0.3 * contextScore;
+        }
+        
+        return chunk;
+      });
       
-      return chunk;
-    });
-    
-    // Re-sort after context biasing
-    candidates.sort((a, b) => b.score - a.score);
-    timings.vectorMs += Date.now() - contextStart;
+      // Re-sort after context biasing
+      candidates.sort((a, b) => b.score - a.score);
+      timings.vectorMs += Date.now() - contextStart;
+    } catch {
+      // Context biasing failed, continue without it
+    }
   }
 
   // Step 2: Query expansion — add more candidates from expanded queries
@@ -102,13 +138,17 @@ export async function search(request: SearchRequest): Promise<SearchResponse> {
           // BM25 search with expanded keywords
           const lexResults = bm25Search(expansion.text, candidateCount);
           mergeAdditionalBM25(candidates, lexResults, 0.5); // 50% weight for expansions
-        } else {
-          // vec/hyde → embed and vector search
-          const vecStart = Date.now();
-          const expEmbedding = await embed(expansion.text);
-          const expResults = vectorSearch(expEmbedding, candidateCount);
-          mergeAdditionalVector(candidates, expResults, 0.5); // 50% weight for expansions
-          timings.vectorMs += Date.now() - vecStart;
+        } else if (canVector) {
+          // vec/hyde → embed and vector search (only if embedder is up)
+          try {
+            const vecStart = Date.now();
+            const expEmbedding = await embed(expansion.text);
+            const expResults = vectorSearch(expEmbedding, candidateCount);
+            mergeAdditionalVector(candidates, expResults, 0.5); // 50% weight for expansions
+            timings.vectorMs += Date.now() - vecStart;
+          } catch {
+            // Embedder failed, skip vector expansion
+          }
         }
       }
 

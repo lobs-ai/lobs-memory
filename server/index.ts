@@ -33,8 +33,8 @@ async function startup() {
   initEmbedder(config);
   const embedderHealth = await checkEmbedderHealth();
   if (!embedderHealth.available) {
-    console.error(`⚠️  Embedder unavailable: ${embedderHealth.error}`);
-    console.error("Search will not work without embeddings. Is LM Studio running?");
+    console.warn(`⚠️  Embedder unavailable: ${embedderHealth.error}`);
+    console.warn("Running in degraded mode — BM25 text search only, no vector search. Start LM Studio for full search.");
   } else {
     console.log("✓ Embedder ready");
   }
