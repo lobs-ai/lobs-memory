@@ -16,7 +16,7 @@ const KNOWN_PROJECTS = [
   "paw-hub", "paw-portal", "ship-api", "lobs-sail", "lobs-sets-sail"
 ];
 const KNOWN_TOOLS = [
-  "OpenClaw", "LM Studio", "Docker", "Tailscale", "GitHub", "Discord",
+  "lobs", "LM Studio", "Docker", "Tailscale", "GitHub", "Discord",
   "Cloudflare", "SQLite", "Bun", "Vite", "React"
 ];
 

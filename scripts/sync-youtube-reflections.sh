@@ -1,7 +1,7 @@
 #!/bin/bash
 # Sync YouTube reflections from lobs DB to markdown files for indexing
 
-DB="$HOME/.openclaw/plugins/lobs/lobs.db"
+DB="$HOME/.lobs/plugins/lobs/lobs.db"
 DEST="$HOME/lobs-shared-memory/research/youtube"
 mkdir -p "$DEST"
 

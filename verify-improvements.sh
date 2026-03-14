@@ -40,13 +40,13 @@ fi
 echo
 
 echo "5. Database stats..."
-sqlite3 ~/.openclaw/plugins/lobs-memory/index.db "SELECT collection, COUNT(*) as docs FROM documents GROUP BY collection;"
+sqlite3 ~/.lobs/plugins/lobs-memory/index.db "SELECT collection, COUNT(*) as docs FROM documents GROUP BY collection;"
 echo
 
 echo "=== All tests complete ==="
 echo
 echo "Summary:"
-echo "- Session transcript indexing: $(sqlite3 ~/.openclaw/plugins/lobs-memory/index.db "SELECT COUNT(*) FROM documents WHERE collection='sessions'") session files indexed"
+echo "- Session transcript indexing: $(sqlite3 ~/.lobs/plugins/lobs-memory/index.db "SELECT COUNT(*) FROM documents WHERE collection='sessions'") session files indexed"
 echo "- Incremental indexing: Check logs for 'Incremental sync: X new/changed, Y deleted (skipped Z unchanged)'"
 echo "- Reranker: Check search timings for 'rerankMs' values (should be 1000-1500ms)"
 echo

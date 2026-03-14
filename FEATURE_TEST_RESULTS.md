@@ -20,7 +20,7 @@
 - 3s timeout on search (fails gracefully if server slow)
 - Logs: `memory-inject: N snippets for query: "..."`
 
-**Testing:** Plugin will be tested in live OpenClaw session after gateway restart.
+**Testing:** Plugin will be tested in live lobs session after gateway restart.
 
 ---
 
@@ -68,7 +68,7 @@ todo     | 36
 **Known entities:**
 - People: Rafe, Marcus, Virt, Lobs, Andrea
 - Projects: PAW, Nexus, lobs-memory, lobs-core, Flock, bot-shared, paw-hub, etc.
-- Tools: OpenClaw, LM Studio, Docker, Tailscale, GitHub, Discord, etc.
+- Tools: lobs, LM Studio, Docker, Tailscale, GitHub, Discord, etc.
 
 **Entity filtering test:**
 ```bash
@@ -159,7 +159,7 @@ The plugin's `before_prompt_build` hook now:
 - `server/chunker.ts`
 - `server/reranker.ts`
 - `server/parsers.ts`
-- `plugin/openclaw.plugin.json`
+- `plugin/lobs.plugin.json`
 - `plugin/package.json`
 
 ---
@@ -168,8 +168,8 @@ The plugin's `before_prompt_build` hook now:
 
 1. ✅ All features implemented and tested
 2. ✅ Server running with full re-index (entities + graph populated)
-3. ⏳ Plugin will be activated after next `openclaw gateway restart`
-4. ⏳ Live testing of auto-injection in main OpenClaw session
+3. ⏳ Plugin will be activated after next `lobs gateway restart`
+4. ⏳ Live testing of auto-injection in main lobs session
 
 ---
 

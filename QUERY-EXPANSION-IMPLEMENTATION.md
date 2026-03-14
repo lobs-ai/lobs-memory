@@ -99,8 +99,8 @@ All core functionality verified:
 No valid expansions parsed from LLM response for query: "Discord bot permissions"
   vec: "Discord bot permissions"
 [2026-03-12 23:53:13] SEARCH "Discord bot permissions" → 2 results in 2009ms (bm25:1ms vec:230ms expand:1765ms)
-  #1 [0.05] /Users/lobs/.openclaw/workspace/AGENTS.md:151-205
-  #2 [0.03] /Users/lobs/.openclaw/workspace/drafts/consumer-group-chat-LOBS-0.md:149-211
+  #1 [0.05] /Users/lobs/.lobs/workspace/AGENTS.md:151-205
+  #2 [0.03] /Users/lobs/.lobs/workspace/drafts/consumer-group-chat-LOBS-0.md:149-211
 ```
 
 ## API Response Format

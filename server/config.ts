@@ -76,7 +76,7 @@ function getDefaultConfig(): Config {
     collections: [
       {
         name: "memory",
-        path: "~/.openclaw/workspace",
+        path: "~/.lobs/workspace",
         pattern: ["MEMORY.md", "memory/**/*.md"],
       },
     ],

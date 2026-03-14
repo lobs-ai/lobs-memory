@@ -28,7 +28,7 @@
 - Formats results as `<recalled-memory>` block
 - Logs: `memory-inject: N snippets for query: "..."`
 
-**Status:** ✅ Implemented. Will activate on next `openclaw gateway restart`.
+**Status:** ✅ Implemented. Will activate on next `lobs gateway restart`.
 
 ---
 
@@ -65,7 +65,7 @@ curl -X POST http://localhost:7420/search \
 **Implementation:**
 - **`server/entities.ts`** - Pattern-based entity extraction
   - Types: person, project, decision, todo, date, tool, concept
-  - Known entities: Rafe, Marcus, Virt, Lobs, PAW, Nexus, OpenClaw, Docker, etc.
+  - Known entities: Rafe, Marcus, Virt, Lobs, PAW, Nexus, lobs, Docker, etc.
   - Decision patterns: "Decision:", "decided", "chose", "switched to", etc.
   - TODO patterns: "- [ ]", "TODO", "FIXME", etc.
   - Date patterns: ISO dates, day names, relative dates
@@ -252,7 +252,7 @@ The `before_prompt_build` hook in the plugin now:
 - ✅ `server/chunker.ts`
 - ✅ `server/reranker.ts`
 - ✅ `server/parsers.ts`
-- ✅ `plugin/openclaw.plugin.json`
+- ✅ `plugin/lobs.plugin.json`
 - ✅ `plugin/package.json`
 
 ---
@@ -333,8 +333,8 @@ All features add minimal overhead and degrade gracefully.
 1. ✅ All features implemented
 2. ✅ Server running and healthy (localhost:7420)
 3. ✅ Database populated with 4,562 entities and 2,168 graph edges
-4. ⏳ Plugin will activate on next `openclaw gateway restart`
-5. ⏳ Live testing of auto-injection in main OpenClaw session
+4. ⏳ Plugin will activate on next `lobs gateway restart`
+5. ⏳ Live testing of auto-injection in main lobs session
 
 ---
 

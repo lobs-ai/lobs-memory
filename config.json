@@ -11,22 +11,22 @@
   "collections": [
     {
       "name": "workspace",
-      "path": "~/.openclaw/workspace",
+      "path": "~/.lobs/workspace",
       "pattern": "**/*.md"
     },
     {
       "name": "knowledge",
-      "path": "~/lobs-shared-memory",
+      "path": "~/lobs/lobs-shared-memory",
       "pattern": "**/*.md"
     },
     {
       "name": "sessions",
-      "path": "~/.openclaw/agents/main/sessions",
+      "path": "~/.lobs/agents/main/sessions",
       "pattern": "*.jsonl"
     },
     {
       "name": "projects",
-      "path": "~/paw-hub",
+      "path": "~/paw/paw-hub",
       "pattern": "**/*.md",
       "exclude": [
         "node_modules/**",
@@ -37,7 +37,7 @@
     },
     {
       "name": "projects",
-      "path": "~/lobs-mobile",
+      "path": "~/lobs/lobs-mobile",
       "pattern": "**/*.md",
       "exclude": [
         "node_modules/**",
@@ -72,7 +72,7 @@
     },
     {
       "name": "projects",
-      "path": "~/lobs-memory",
+      "path": "~/lobs/lobs-core/memory",
       "pattern": "**/*.md",
       "exclude": [
         "node_modules/**",
@@ -83,7 +83,7 @@
     },
     {
       "name": "projects",
-      "path": "~/paw-designs",
+      "path": "~/paw/paw-designs",
       "pattern": "**/*.md",
       "exclude": [
         "node_modules/**",
@@ -94,7 +94,7 @@
     },
     {
       "name": "projects",
-      "path": "~/bot-shared",
+      "path": "~/paw/bot-shared",
       "pattern": "**/*.md",
       "exclude": [
         "node_modules/**",
@@ -159,11 +159,11 @@
       "halfLifeDays": 30
     },
     "reranking": {
-      "enabled": true,
+      "enabled": false,
       "candidateCount": 15
     },
     "queryExpansion": {
-      "enabled": true,
+      "enabled": false,
       "strongSignalThreshold": 0.8
     }
   },

@@ -19,7 +19,7 @@ import numpy as np
 import onnxruntime as ort
 from tokenizers import Tokenizer
 
-MODEL_DIR = os.path.expanduser("~/.openclaw/models/bge-reranker-v2-m3-onnx")
+MODEL_DIR = os.path.expanduser("~/.lobs/models/bge-reranker-v2-m3-onnx")
 PORT = 7421
 
 print(f"Loading BGE Reranker v2 M3 from {MODEL_DIR}...")

@@ -20,7 +20,7 @@ export interface Document {
 let db: Database | null = null;
 
 export function initDb(dbPath?: string): Database {
-  const path = dbPath || join(process.env.HOME || "~", ".openclaw", "plugins", "lobs-memory", "index.db");
+  const path = dbPath || join(process.env.HOME || "~", ".lobs", "plugins", "lobs-memory", "index.db");
   
   // Ensure directory exists
   const dir = dirname(path);
@@ -287,7 +287,7 @@ function preprocessQuery(query: string): string {
     .replace(/_/g, ' ')
     // Strip common path prefixes for cleaner matching
     .replace(/~\//g, '')
-    .replace(/\.openclaw\//g, '')
+    .replace(/\.lobs\//g, '')
     .replace(/workspace\//g, '');
 }
 

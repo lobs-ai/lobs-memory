@@ -47,7 +47,7 @@ After:
 - Added `preprocessQuery()` function:
   - Splits camelCase: `memorySearch` → `memory Search`
   - Splits snake_case: `memory_search` → `memory search`
-  - Strips common path prefixes (`~/`, `.openclaw/`, `workspace/`)
+  - Strips common path prefixes (`~/`, `.lobs/`, `workspace/`)
 - Improves matching for technical terms and file paths
 
 ### 5. Score Normalization (search.ts) ✅
@@ -117,7 +117,7 @@ Per instructions:
 
 To apply these improvements to an existing index:
 
-1. **Delete old index:** `rm ~/.openclaw/plugins/lobs-memory/index.db*`
+1. **Delete old index:** `rm ~/.lobs/plugins/lobs-memory/index.db*`
 2. **Restart server:** `cd ~/lobs-memory && bun run server/index.ts`
 3. **Wait for reindex:** Watch logs for "Indexer ready" (~1 minute for 300 docs)
 

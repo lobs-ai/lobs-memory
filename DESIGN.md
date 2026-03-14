@@ -2,7 +2,7 @@
 
 ## Problem
 
-OpenClaw memory search has two backends:
+lobs memory search has two backends:
 1. **Builtin** — fast (sub-ms) but basic (BM25 + cosine, no reranking, no query expansion)
 2. **QMD** — high quality (reranking + expansion + hybrid) but cold-starts models every CLI call (~3.2s)
 
@@ -10,7 +10,7 @@ We need: QMD quality + builtin speed.
 
 ## Solution
 
-Persistent HTTP server that keeps all models loaded in memory. OpenClaw plugin routes `memory_search` calls to the server instead of shelling out to QMD CLI.
+Persistent HTTP server that keeps all models loaded in memory. lobs plugin routes `memory_search` calls to the server instead of shelling out to QMD CLI.
 
 ## Key Design Decisions
 
@@ -89,7 +89,7 @@ Persistent HTTP server that keeps all models loaded in memory. OpenClaw plugin r
 - Default: 8 results
 - Each result: `{ path, startLine, endLine, score, snippet, source, citation }`
 
-## OpenClaw Plugin
+## lobs Plugin
 
 ### Tool Registration
 ```typescript
@@ -132,7 +132,7 @@ api.registerTool((ctx) => {
 ```
 
 ### Fallback Behavior
-- If server is unreachable, fall back to OpenClaw's builtin memory search
+- If server is unreachable, fall back to lobs's builtin memory search
 - Log warning so we know something's wrong
 - Health check on plugin init to verify server is running
 
@@ -219,8 +219,8 @@ lobs-memory/
 │   ├── queue.ts          # Priority queue (search > index)
 │   └── types.ts          # Shared types
 ├── plugin/
-│   ├── index.ts          # OpenClaw plugin entry
-│   ├── openclaw.plugin.json
+│   ├── index.ts          # lobs plugin entry
+│   ├── lobs.plugin.json
 │   └── package.json
 ├── config.json           # Default server config
 ├── package.json
@@ -244,7 +244,7 @@ lobs-memory/
 ## Future Enhancements
 
 - Ollama integration for bigger/better embedding models
-- Session transcript indexing (OpenClaw session JSONL files)
+- Session transcript indexing (lobs session JSONL files)
 - Collection-level search scoping
 - Configurable pipeline stages (skip expansion, skip reranking)
 - Metrics/observability endpoint

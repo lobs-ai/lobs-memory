@@ -45,8 +45,8 @@ All critical issues have been resolved. The server is now production-ready.
 
 ```
 [2026-03-12 22:24:09] SEARCH "PAW project tasks" → 5 results in 43ms (bm25:1ms vec:21ms)
-  #1 [0.21] /Users/lobs/.openclaw/workspace/memory/2026-03-12.md:41-94
-  #2 [0.19] /Users/lobs/.openclaw/workspace/memory/2026-03-08-openclaw-update.md:89-176
+  #1 [0.21] /Users/lobs/.lobs/workspace/memory/2026-03-12.md:41-94
+  #2 [0.19] /Users/lobs/.lobs/workspace/memory/2026-03-08-lobs-update.md:89-176
   ...
 ```
 

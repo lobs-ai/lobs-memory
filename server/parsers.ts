@@ -10,7 +10,7 @@ export interface ParsedContent {
 }
 
 /**
- * Parse OpenClaw session transcript (JSONL format)
+ * Parse lobs session transcript (JSONL format)
  * Each line is a JSON object with a message
  */
 export function parseSessionJSONL(content: string, filepath: string): ParsedContent {
@@ -42,7 +42,7 @@ export function parseSessionJSONL(content: string, filepath: string): ParsedCont
       if (typeof msg.content === "string") {
         content = msg.content;
       } else if (Array.isArray(msg.content)) {
-        // Handle content array format (common in OpenClaw sessions)
+        // Handle content array format (common in lobs sessions)
         const textParts = msg.content
           .filter((p: any) => p.type === "text" && typeof p.text === "string")
           .map((p: any) => p.text);

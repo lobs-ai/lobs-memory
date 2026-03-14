@@ -41,7 +41,7 @@ Edit `config.json` or set environment variables:
   "collections": [
     {
       "name": "memory",
-      "path": "~/.openclaw/workspace",
+      "path": "~/.lobs/workspace",
       "pattern": ["MEMORY.md", "memory/**/*.md"]
     }
   ]
@@ -152,7 +152,7 @@ bun install
 bun run dev
 
 # Check database
-sqlite3 ~/.openclaw/plugins/lobs-memory/index.db "SELECT COUNT(*) FROM documents;"
+sqlite3 ~/.lobs/plugins/lobs-memory/index.db "SELECT COUNT(*) FROM documents;"
 ```
 
 ## Troubleshotics

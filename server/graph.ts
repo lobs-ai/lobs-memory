@@ -128,7 +128,7 @@ function guessEntityType(entity: string): string {
   }
 
   // Known tools
-  if (["openclaw", "lm studio", "docker", "tailscale", "github", "discord",
+  if (["lobs", "lm studio", "docker", "tailscale", "github", "discord",
        "cloudflare", "sqlite", "bun", "vite", "react"].includes(lower)) {
     return "tool";
   }

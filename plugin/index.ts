@@ -1,11 +1,11 @@
 /**
- * OpenClaw memory plugin — lobs-memory
+ * lobs memory plugin — lobs-memory
  * 
  * Replaces memory-core. Starts the lobs-memory search server as a service
  * and proxies memory_search/memory_get tool calls to it.
  */
-import type { OpenClawPluginApi, AnyAgentTool } from "openclaw/plugin-sdk/memory-core";
-import { emptyPluginConfigSchema } from "openclaw/plugin-sdk/memory-core";
+import type { lobsPluginApi, AnyAgentTool } from "lobs/plugin-sdk/memory-core";
+import { emptyPluginConfigSchema } from "lobs/plugin-sdk/memory-core";
 import { readFileSync } from "fs";
 import { resolve, relative } from "path";
 import { spawn, type ChildProcess } from "child_process";
@@ -24,7 +24,7 @@ const memoryLobsPlugin = {
   kind: "memory" as const,
   configSchema: emptyPluginConfigSchema(),
 
-  register(api: OpenClawPluginApi) {
+  register(api: lobsPluginApi) {
     const log = api.logger;
     log.info("lobs-memory: registering plugin hooks and tools...");
     log.info(`lobs-memory: api.on available: ${typeof api.on}`);
@@ -151,7 +151,7 @@ const memoryLobsPlugin = {
         const data = await response.json();
         if (!data.results || data.results.length === 0) return {};
 
-        // Filter out files already in workspace context (always loaded by OpenClaw)
+        // Filter out files already in workspace context (always loaded by lobs)
         const WORKSPACE_FILES = new Set([
           "MEMORY.md", "SOUL.md", "USER.md", "AGENTS.md", "TOOLS.md", 
           "IDENTITY.md", "HEARTBEAT.md", "BOOTSTRAP.md",
@@ -257,7 +257,7 @@ const memoryLobsPlugin = {
     // ── Tools: memory_search + memory_get ────────────────────────────
     api.registerTool(
       (ctx) => {
-        const workspaceDir = ctx.workspaceDir || process.env.HOME + "/.openclaw/workspace";
+        const workspaceDir = ctx.workspaceDir || process.env.HOME + "/.lobs/workspace";
 
         const memorySearchTool: AnyAgentTool = {
           name: "memory_search",

@@ -1,7 +1,7 @@
 #!/bin/bash
-# Refresh OpenClaw docs from installed package (English only, markdown only)
-SOURCE="/opt/homebrew/lib/node_modules/openclaw/docs"
-DEST="$HOME/lobs-shared-memory/openclaw-docs"
+# Refresh lobs docs from installed package (English only, markdown only)
+SOURCE="/opt/homebrew/lib/node_modules/lobs/docs"
+DEST="$HOME/lobs-shared-memory/lobs-docs"
 
 if [ -d "$SOURCE" ]; then
   rm -rf "$DEST"
@@ -16,8 +16,8 @@ if [ -d "$SOURCE" ]; then
   # Remove empty directories
   find "$DEST" -type d -empty -delete
   
-  echo "Refreshed OpenClaw docs: $(find "$DEST" -name '*.md' | wc -l) markdown files"
+  echo "Refreshed lobs docs: $(find "$DEST" -name '*.md' | wc -l) markdown files"
 else
-  echo "OpenClaw docs not found at $SOURCE"
+  echo "lobs docs not found at $SOURCE"
   exit 1
 fi
