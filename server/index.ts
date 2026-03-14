@@ -13,7 +13,7 @@ import { initSearch, search } from "./search.js";
 import { startIndexer, stopIndexer, getIndexerStatus, reindexAll } from "./indexer.js";
 import { extractSnippet } from "./chunker.js";
 import { readFileSync } from "fs";
-import type { SearchRequest, SearchResponse, HealthResponse, GraphRequest, GraphResponse } from "./types.js";
+import type { SearchRequest, SearchResponse, HealthResponse, GraphRequest, GraphResponse, BatchSearchRequest, BatchSearchResponse } from "./types.js";
 
 const startTime = Date.now();
 
@@ -131,6 +131,41 @@ async function startup() {
           }
 
           const response = await search(body);
+          return new Response(JSON.stringify(response, null, 2), { headers });
+        }
+
+        // Batch search — multiple queries in one request
+        if (path === "/search/batch" && req.method === "POST") {
+          const batchStart = performance.now();
+          const body = (await req.json()) as BatchSearchRequest;
+          
+          if (!body.searches?.length) {
+            return new Response(JSON.stringify({ error: "searches array required" }), {
+              status: 400,
+              headers,
+            });
+          }
+
+          // Run all searches concurrently
+          const entries = await Promise.all(
+            body.searches.map(async (item) => {
+              const searchReq: SearchRequest = {
+                query: item.query,
+                maxResults: item.maxResults,
+                minScore: item.minScore,
+                collections: item.collections,
+                conversationContext: item.conversationContext,
+              };
+              const result = await search(searchReq);
+              return [item.id, result] as const;
+            })
+          );
+
+          const response: BatchSearchResponse = {
+            results: Object.fromEntries(entries),
+            timings: { totalMs: Math.round(performance.now() - batchStart) },
+          };
+
           return new Response(JSON.stringify(response, null, 2), { headers });
         }
 

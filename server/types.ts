@@ -120,6 +120,26 @@ export interface ScoredChunk extends Chunk {
   rerankScore?: number;
 }
 
+// Batch search types
+
+export interface BatchSearchItem {
+  id: string;              // caller-chosen key for matching results
+  query: string;
+  maxResults?: number;
+  minScore?: number;
+  collections?: string[];
+  conversationContext?: string;
+}
+
+export interface BatchSearchRequest {
+  searches: BatchSearchItem[];
+}
+
+export interface BatchSearchResponse {
+  results: Record<string, SearchResponse>;  // keyed by BatchSearchItem.id
+  timings: { totalMs: number };
+}
+
 // Graph query types (Feature 4)
 
 export interface GraphRequest {
