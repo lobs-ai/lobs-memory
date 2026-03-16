@@ -28,6 +28,7 @@ import { clearFileCache } from "./search.js";
 import { parseFile } from "./parsers.js";
 import { patternExtract } from "./entities.js";
 import { extractRelationships } from "./graph.js";
+import { checkEmbedderHealth } from "./embedder.js";
 import type { Config, Collection } from "./types.js";
 
 interface IndexerState {
@@ -35,9 +36,14 @@ interface IndexerState {
   watchers: Map<string, any>;
   isIndexing: boolean;
   isPaused: boolean;
-  pendingFiles: Set<string>;
+  pendingFiles: Map<string, string>;
+  pendingCollections: Set<string>;
   syncIntervalHandle: Timer | null;
   embedderDownLogged: boolean;
+  lastEmbedderHealthCheckAt: number;
+  embedderAvailable: boolean;
+  embedderError?: string;
+  lastEmbedderWarningAt: number;
 }
 
 const state: IndexerState = {
@@ -45,10 +51,68 @@ const state: IndexerState = {
   watchers: new Map(),
   isIndexing: false,
   isPaused: false,
-  pendingFiles: new Set(),
+  pendingFiles: new Map(),
+  pendingCollections: new Set(),
   embedderDownLogged: false,
   syncIntervalHandle: null,
+  lastEmbedderHealthCheckAt: 0,
+  embedderAvailable: true,
+  embedderError: undefined,
+  lastEmbedderWarningAt: 0,
 };
+
+interface CollectionSyncPlan {
+  collection: Collection;
+  diskFiles: number;
+  unchanged: number;
+  toIndex: string[];
+  toDelete: string[];
+}
+
+interface FileIndexTask {
+  path: string;
+  collectionName: string;
+}
+
+const DEFAULT_EXCLUDE_SEGMENTS = [
+  "/node_modules/",
+  "/.git/",
+  "/dist/",
+  "/build/",
+  "/Pods/",
+  "/.build/",
+];
+
+function shouldIgnorePath(path: string): boolean {
+  const normalized = path.replace(/\\/g, "/");
+  return DEFAULT_EXCLUDE_SEGMENTS.some((segment) => normalized.includes(segment));
+}
+
+async function ensureEmbedderAvailable(): Promise<boolean> {
+  const now = Date.now();
+  if (now - state.lastEmbedderHealthCheckAt < 30_000) {
+    if (!state.embedderAvailable && now - state.lastEmbedderWarningAt > 30_000) {
+      console.warn(`Embedder unavailable — skipping indexing until LM Studio recovers (${state.embedderError ?? "unknown error"})`);
+      state.lastEmbedderWarningAt = now;
+    }
+    return state.embedderAvailable;
+  }
+
+  state.lastEmbedderHealthCheckAt = now;
+  const health = await checkEmbedderHealth();
+  state.embedderAvailable = health.available;
+  state.embedderError = health.error;
+  if (health.available) {
+    state.embedderDownLogged = false;
+  }
+
+  if (!health.available) {
+    console.warn(`Embedder unavailable — skipping indexing until LM Studio recovers (${health.error ?? "unknown error"})`);
+    state.lastEmbedderWarningAt = now;
+  }
+
+  return health.available;
+}
 
 /**
  * Initialize indexer and start file watchers
@@ -56,20 +120,20 @@ const state: IndexerState = {
 export async function startIndexer(config: Config): Promise<void> {
   state.config = config;
 
-  console.log("Starting incremental index sync...");
-  await incrementalSyncAllCollections();
+  console.log("Starting batched index sync...");
+  await runBatchSync("startup", true);
 
   if (config.indexing.watchEnabled) {
     console.log("Starting file watchers...");
     startWatchers();
   }
 
-  // Start background periodic sync
-  const syncIntervalMs = (config.indexing as any).syncIntervalMs || 60000; // Default 60s
-  console.log(`Starting background sync (interval: ${syncIntervalMs}ms)`);
+  // Start background periodic sweep
+  const syncIntervalMs = (config.indexing as any).syncIntervalMs || 15 * 60 * 1000;
+  console.log(`Starting background batch sweep (interval: ${syncIntervalMs}ms)`);
   state.syncIntervalHandle = setInterval(async () => {
     if (!state.isPaused && !state.isIndexing) {
-      await incrementalSyncAllCollections();
+      await runBatchSync("scheduled", true);
     }
   }, syncIntervalMs);
 
@@ -77,25 +141,20 @@ export async function startIndexer(config: Config): Promise<void> {
 }
 
 /**
- * Incremental sync for all collections (only re-index changed/new files)
+ * Queue a file/collection for the next batch sweep instead of indexing immediately.
  */
-async function incrementalSyncAllCollections(): Promise<void> {
-  if (!state.config) return;
-
-  for (const collection of state.config.collections) {
-    await incrementalSyncCollection(collection);
-  }
+function queueFileForBatch(path: string, collectionName: string, reason: "add" | "change" | "delete"): void {
+  if (shouldIgnorePath(path)) return;
+  state.pendingFiles.set(path, collectionName);
+  state.pendingCollections.add(collectionName);
+  const relPath = path.replace(process.env.HOME || "", "~");
+  console.log(`[indexer.queue] ${reason} queued for batch: ${relPath} (${collectionName})`);
 }
 
 /**
- * Incremental sync for a single collection
+ * Discover changed/new/deleted files for a single collection.
  */
-async function incrementalSyncCollection(collection: Collection): Promise<void> {
-  if (!state.config) return;
-
-  const startTime = Date.now();
-  console.log(`Syncing collection: ${collection.name} (${collection.path})`);
-
+async function buildCollectionSyncPlan(collection: Collection): Promise<CollectionSyncPlan> {
   // Find all matching files on disk
   const patterns = Array.isArray(collection.pattern) ? collection.pattern : [collection.pattern];
   const diskFiles = new Set<string>();
@@ -164,24 +223,66 @@ async function incrementalSyncCollection(collection: Collection): Promise<void> 
     }
   }
 
-  // Perform incremental updates
-  let indexed = 0;
-  for (const path of toIndex) {
-    const changed = await indexFile(path, collection.name);
-    if (changed) indexed++;
-  }
+  return {
+    collection,
+    diskFiles: diskFiles.size,
+    unchanged: diskFiles.size - toIndex.length,
+    toIndex,
+    toDelete,
+  };
+}
 
-  for (const path of toDelete) {
-    deleteDocument(path);
-    clearFileCache(path);
-  }
+/**
+ * Run one batched sweep across collections/projects.
+ */
+async function runBatchSync(reason: string, forceFullSweep = false): Promise<void> {
+  if (!state.config || state.isIndexing) return;
 
-  const skipped = diskFiles.size - toIndex.length;
-  const elapsed = Date.now() - startTime;
-  
-  console.log(
-    `Incremental sync (${collection.name}): ${toIndex.length} new/changed, ${toDelete.length} deleted (skipped ${skipped} unchanged) — ${elapsed}ms`
-  );
+  state.isIndexing = true;
+  const startedAt = Date.now();
+  const pendingFilesSnapshot = new Map(state.pendingFiles);
+  const pendingCollectionsSnapshot = new Set(state.pendingCollections);
+  state.pendingFiles.clear();
+  state.pendingCollections.clear();
+
+  try {
+    const collections = state.config.collections;
+    const collectionScope = forceFullSweep ? collections : collections.filter(c => pendingCollectionsSnapshot.has(c.name));
+    const targetCollections = collectionScope.length > 0 ? collectionScope : collections;
+
+    console.log(
+      `[indexer.batch] start reason=${reason} collections=${targetCollections.length}/${collections.length} ` +
+      `queued_files=${pendingFilesSnapshot.size} queued_collections=${pendingCollectionsSnapshot.size}`,
+    );
+
+    const plans = await Promise.all(targetCollections.map((collection) => buildCollectionSyncPlan(collection)));
+    const toDelete = plans.flatMap((plan) => plan.toDelete);
+    const toIndex: FileIndexTask[] = plans.flatMap((plan) =>
+      plan.toIndex.map((path) => ({ path, collectionName: plan.collection.name })),
+    );
+
+    for (const path of toDelete) {
+      deleteDocument(path);
+      clearFileCache(path);
+    }
+
+    let indexed = 0;
+    for (const task of toIndex) {
+      const changed = await indexFile(task.path, task.collectionName);
+      if (changed) indexed++;
+    }
+
+    const totalDiskFiles = plans.reduce((sum, plan) => sum + plan.diskFiles, 0);
+    const totalUnchanged = plans.reduce((sum, plan) => sum + plan.unchanged, 0);
+    console.log(
+      `[indexer.batch] done reason=${reason} indexed=${indexed}/${toIndex.length} deleted=${toDelete.length} ` +
+      `unchanged=${totalUnchanged} scanned_files=${totalDiskFiles} elapsed_ms=${Date.now() - startedAt}`,
+    );
+  } catch (err) {
+    console.error(`[indexer.batch] failed reason=${reason}:`, err);
+  } finally {
+    state.isIndexing = false;
+  }
 }
 
 /**
@@ -190,6 +291,7 @@ async function incrementalSyncCollection(collection: Collection): Promise<void> 
  */
 async function indexFile(path: string, collectionName: string): Promise<boolean> {
   if (!state.config) return false;
+  if (shouldIgnorePath(path)) return false;
 
   try {
     // Check if file has changed
@@ -200,6 +302,10 @@ async function indexFile(path: string, collectionName: string): Promise<boolean>
     const existing = getDocument(path);
     if (existing && existing.hash === hash && existing.mtime === stats.mtimeMs) {
       // File unchanged, skip
+      return false;
+    }
+
+    if (!(await ensureEmbedderAvailable())) {
       return false;
     }
 
@@ -355,7 +461,7 @@ function startWatchers(): void {
     watcher
       .on("add", (path) => handleFileChange(join(collection.path, path), collection.name))
       .on("change", (path) => handleFileChange(join(collection.path, path), collection.name))
-      .on("unlink", (path) => handleFileDelete(join(collection.path, path)));
+      .on("unlink", (path) => handleFileDelete(join(collection.path, path), collection.name));
 
     state.watchers.set(collection.name, watcher);
     console.log(`Watching: ${collection.name} (${collection.path})`);
@@ -366,22 +472,14 @@ function startWatchers(): void {
  * Handle file change (add or update)
  */
 async function handleFileChange(path: string, collectionName: string): Promise<void> {
-  if (state.isPaused) {
-    state.pendingFiles.add(path);
-    return;
-  }
-
-  console.log(`File changed: ${path}`);
-  await indexFile(path, collectionName);
+  queueFileForBatch(path, collectionName, "change");
 }
 
 /**
  * Handle file deletion
  */
-function handleFileDelete(path: string): void {
-  console.log(`File deleted: ${path}`);
-  deleteDocument(path);
-  clearFileCache(path);
+function handleFileDelete(path: string, collectionName: string): void {
+  queueFileForBatch(path, collectionName, "delete");
 }
 
 /**
@@ -397,18 +495,11 @@ export function pauseIndexing(): void {
 export async function resumeIndexing(): Promise<void> {
   state.isPaused = false;
 
-  if (state.pendingFiles.size > 0) {
-    console.log(`Processing ${state.pendingFiles.size} pending files...`);
-    const pending = Array.from(state.pendingFiles);
-    state.pendingFiles.clear();
-
-    for (const path of pending) {
-      // Find collection for this file
-      const collection = state.config?.collections.find(c => path.startsWith(c.path));
-      if (collection) {
-        await indexFile(path, collection.name);
-      }
-    }
+  if (state.pendingFiles.size > 0 || state.pendingCollections.size > 0) {
+    console.log(
+      `[indexer.batch] resume requested with queued_files=${state.pendingFiles.size} queued_collections=${state.pendingCollections.size}`,
+    );
+    await runBatchSync("resume", true);
   }
 }
 
@@ -416,8 +507,8 @@ export async function resumeIndexing(): Promise<void> {
  * Manually trigger re-sync of all collections
  */
 export async function reindexAll(): Promise<void> {
-  console.log("Manual re-sync triggered");
-  await incrementalSyncAllCollections();
+  console.log("Manual batched re-sync triggered");
+  await runBatchSync("manual", true);
 }
 
 /**
@@ -449,6 +540,7 @@ export function getIndexerStatus() {
     isIndexing: state.isIndexing,
     isPaused: state.isPaused,
     pendingFiles: state.pendingFiles.size,
+    pendingCollections: state.pendingCollections.size,
     watchersActive: state.watchers.size,
   };
 }

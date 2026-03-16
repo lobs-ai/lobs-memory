@@ -191,6 +191,6 @@
   "indexing": {
     "debounceMs": 2000,
     "watchEnabled": true,
-    "syncIntervalMs": 300000
+    "syncIntervalMs": 900000
   }
 }

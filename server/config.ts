@@ -97,6 +97,7 @@ function getDefaultConfig(): Config {
     indexing: {
       debounceMs: 2000,
       watchEnabled: true,
+      syncIntervalMs: 15 * 60 * 1000,
     },
   };
 }
