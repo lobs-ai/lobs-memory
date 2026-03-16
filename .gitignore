@@ -4,3 +4,4 @@ dist/
 *.sqlite-shm
 *.sqlite-wal
 .env
+.DS_Store

@@ -25,18 +25,20 @@
       "pattern": "*.jsonl"
     },
     {
-      "name": "projects",
+      "name": "paw-hub",
       "path": "~/paw/paw-hub",
       "pattern": "**/*.md",
       "exclude": [
         "node_modules/**",
         ".git/**",
         "dist/**",
-        "build/**"
+        "build/**",
+        "**/venv/**",
+        "**/site-packages/**"
       ]
     },
     {
-      "name": "projects",
+      "name": "lobs-mobile",
       "path": "~/lobs/lobs-mobile",
       "pattern": "**/*.md",
       "exclude": [
@@ -45,33 +47,42 @@
         "dist/**",
         "build/**",
         "Pods/**",
-        ".build/**"
+        ".build/**",
+        "**/venv/**",
+        "**/site-packages/**"
       ]
     },
     {
-      "name": "projects",
+      "name": "lobs-nexus",
       "path": "~/lobs/lobs-nexus",
       "pattern": "**/*.md",
       "exclude": [
         "node_modules/**",
         ".git/**",
         "dist/**",
-        "build/**"
+        "build/**",
+        "**/venv/**",
+        "**/site-packages/**"
       ]
     },
     {
-      "name": "projects",
+      "name": "lobs-core",
       "path": "~/lobs/lobs-core",
       "pattern": "**/*.md",
       "exclude": [
-        "node_modules/**",
+        "**/node_modules/**",
         ".git/**",
         "dist/**",
-        "build/**"
+        "build/**",
+        "nexus/**",
+        "memory/**",
+        "**/venv/**",
+        "**/tools-venv/**",
+        "**/site-packages/**"
       ]
     },
     {
-      "name": "projects",
+      "name": "lobs-core-memory",
       "path": "~/lobs/lobs-core/memory",
       "pattern": "**/*.md",
       "exclude": [
@@ -82,7 +93,7 @@
       ]
     },
     {
-      "name": "projects",
+      "name": "paw-designs",
       "path": "~/paw/paw-designs",
       "pattern": "**/*.md",
       "exclude": [
@@ -93,7 +104,7 @@
       ]
     },
     {
-      "name": "projects",
+      "name": "bot-shared",
       "path": "~/paw/bot-shared",
       "pattern": "**/*.md",
       "exclude": [
@@ -104,18 +115,20 @@
       ]
     },
     {
-      "name": "projects",
+      "name": "ship-api",
       "path": "~/ship-api",
       "pattern": "**/*.md",
       "exclude": [
         "node_modules/**",
         ".git/**",
         "dist/**",
-        "build/**"
+        "build/**",
+        "**/venv/**",
+        "**/site-packages/**"
       ]
     },
     {
-      "name": "projects",
+      "name": "lobs-sail",
       "path": "~/lobs-sail",
       "pattern": "**/*.md",
       "exclude": [
@@ -126,22 +139,26 @@
       ]
     },
     {
-      "name": "projects",
+      "name": "lobs-sets-sail",
       "path": "~/paw/lobs-sets-sail",
       "pattern": "**/*.md",
       "exclude": [
         "node_modules/**",
         ".git/**",
         "dist/**",
-        "build/**"
+        "build/**",
+        "**/venv/**",
+        "**/site-packages/**"
       ]
     },
     {
-      "name": "projects",
+      "name": "lobslab-infra",
       "path": "~/lobs/lobslab-infra",
       "pattern": "**/*.md",
       "exclude": [
-        ".git/**"
+        ".git/**",
+        "**/venv/**",
+        "**/site-packages/**"
       ]
     }
   ],
@@ -174,6 +191,6 @@
   "indexing": {
     "debounceMs": 2000,
     "watchEnabled": true,
-    "syncIntervalMs": 60000
+    "syncIntervalMs": 300000
   }
 }

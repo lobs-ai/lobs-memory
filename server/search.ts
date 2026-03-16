@@ -167,9 +167,24 @@ export async function search(request: SearchRequest): Promise<SearchResponse> {
     candidates = candidates.filter(c => matchingChunkIds.has(c.id!));
   }
 
-  // Step 4: Collection filter
+  // Step 4: Collection filter (with alias expansion)
   if (request.collections && request.collections.length > 0) {
-    candidates = candidates.filter(c => request.collections!.includes(c.collection));
+    // Expand "projects" alias to all non-system collection names
+    const systemCollections = new Set(["workspace", "knowledge", "sessions"]);
+    const projectCollections = config!.collections
+      .map(c => c.name)
+      .filter(n => !systemCollections.has(n));
+
+    const expandedCollections = new Set<string>();
+    for (const c of request.collections) {
+      if (c === "projects") {
+        projectCollections.forEach(pc => expandedCollections.add(pc));
+      } else {
+        expandedCollections.add(c);
+      }
+    }
+
+    candidates = candidates.filter(c => expandedCollections.has(c.collection));
   }
 
   // Step 5: Reranking — only when top scores are close (worth reordering)

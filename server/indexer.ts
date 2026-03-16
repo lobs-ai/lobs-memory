@@ -105,15 +105,22 @@ async function incrementalSyncCollection(collection: Collection): Promise<void> 
       cwd: collection.path,
       absolute: true,
       nodir: true,
-      ignore: (collection as any).exclude || ["node_modules/**", ".git/**", "dist/**", "build/**"],
+      ignore: collection.exclude || [
+        "node_modules/**", ".git/**", "dist/**", "build/**",
+        "**/venv/**", "**/site-packages/**", "**/.venv/**",
+        "**/tools-venv/**", "**/__pycache__/**",
+      ],
     });
     matches.forEach(f => diskFiles.add(f));
   }
 
-  // Get existing documents from DB for this collection
+  // Get existing documents from DB for this collection AND path
+  // Multiple collections can share the same name (e.g. "projects") but have different paths.
+  // Scope to files under this collection's resolved path to avoid cross-collection deletion.
   const db = getDb();
-  const existingDocs = db.prepare("SELECT path, hash, mtime FROM documents WHERE collection = ?")
-    .all(collection.name) as Array<{ path: string; hash: string; mtime: number }>;
+  const collectionPath = collection.path.endsWith("/") ? collection.path : collection.path + "/";
+  const existingDocs = db.prepare("SELECT path, hash, mtime FROM documents WHERE collection = ? AND path LIKE ?")
+    .all(collection.name, collectionPath + "%") as Array<{ path: string; hash: string; mtime: number }>;
   
   const existingPaths = new Set(existingDocs.map(d => d.path));
   const existingByPath = new Map(existingDocs.map(d => [d.path, d]));
@@ -129,15 +136,21 @@ async function incrementalSyncCollection(collection: Collection): Promise<void> 
       // New file
       toIndex.push(path);
     } else {
-      // Check if changed (compare hash/mtime)
+      // Check if changed — use mtime first (cheap), only hash if mtime differs
       try {
         const stats = statSync(path);
-        const content = readFileSync(path, "utf-8");
-        const hash = createHash("sha256").update(content).digest("hex");
-        
-        if (hash !== existing.hash || stats.mtimeMs !== existing.mtime) {
-          toIndex.push(path);
+        if (stats.mtimeMs !== existing.mtime) {
+          // mtime changed — verify with hash to avoid re-indexing on touch
+          const content = readFileSync(path, "utf-8");
+          const hash = createHash("sha256").update(content).digest("hex");
+          if (hash !== existing.hash) {
+            toIndex.push(path);
+          } else {
+            // Content unchanged despite mtime change — update mtime in DB
+            db.prepare("UPDATE documents SET mtime = ? WHERE path = ?").run(stats.mtimeMs, path);
+          }
         }
+        // If mtime matches, skip entirely — no disk read needed
       } catch (err) {
         console.error(`Error checking ${path}:`, err);
       }
@@ -328,6 +341,11 @@ function startWatchers(): void {
     const watcher = watch(patterns, {
       cwd: collection.path,
       ignoreInitial: true,
+      ignored: collection.exclude || [
+        "**/node_modules/**", "**/.git/**", "**/dist/**", "**/build/**",
+        "**/venv/**", "**/site-packages/**", "**/.venv/**",
+        "**/tools-venv/**", "**/__pycache__/**",
+      ],
       awaitWriteFinish: {
         stabilityThreshold: state.config.indexing.debounceMs,
         pollInterval: 100,

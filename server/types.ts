@@ -23,6 +23,7 @@ export interface Collection {
   name: string;
   path: string;
   pattern: string | string[];
+  exclude?: string[];
 }
 
 export interface SearchConfig {
