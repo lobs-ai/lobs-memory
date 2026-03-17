@@ -31,7 +31,7 @@ export function resetEmbedderCache(): void {
   lastEmbedderCheck = 0;
   embedderAvailable = false;
 }
-import { scoreRelevanceBatch, isRerankerAvailable } from "./reranker.js";
+import { rerankDocuments, isRerankerAvailable } from "./reranker.js";
 import { extractSnippet, createCitation } from "./chunker.js";
 import { expandQuery, initExpander } from "./expander.js";
 import { readFileSync } from "fs";
@@ -39,6 +39,46 @@ import type { Config, SearchRequest, SearchResponse, SearchResult, ScoredChunk }
 import { parseFile } from "./parsers.js";
 
 let config: Config | null = null;
+
+// Simple LRU cache with TTL for repeated queries
+const CACHE_TTL_MS = 60_000; // 1 minute
+const CACHE_MAX_SIZE = 100;
+const searchCache = new Map<string, { result: SearchResponse; timestamp: number }>();
+
+function getCacheKey(request: SearchRequest): string {
+  return JSON.stringify({
+    q: request.query,
+    c: request.collections,
+    m: request.maxResults,
+    cc: request.conversationContext,
+  });
+}
+
+function getCached(request: SearchRequest): SearchResponse | null {
+  const key = getCacheKey(request);
+  const entry = searchCache.get(key);
+  if (!entry) return null;
+  if (Date.now() - entry.timestamp > CACHE_TTL_MS) {
+    searchCache.delete(key);
+    return null;
+  }
+  return entry.result;
+}
+
+function setCache(request: SearchRequest, result: SearchResponse): void {
+  const key = getCacheKey(request);
+  searchCache.set(key, { result, timestamp: Date.now() });
+  // Evict oldest if over limit
+  if (searchCache.size > CACHE_MAX_SIZE) {
+    const oldest = searchCache.keys().next().value;
+    if (oldest) searchCache.delete(oldest);
+  }
+}
+
+/** Invalidate cache (called when index changes). */
+export function invalidateSearchCache(): void {
+  searchCache.clear();
+}
 
 export function initSearch(cfg: Config): void {
   config = cfg;
@@ -50,6 +90,14 @@ export function initSearch(cfg: Config): void {
  */
 export async function search(request: SearchRequest): Promise<SearchResponse> {
   if (!config) throw new Error("Search not initialized");
+
+  // Check cache first
+  const cached = getCached(request);
+  if (cached) {
+    const ts = new Date().toISOString().replace("T", " ").split(".")[0];
+    console.log(`[${ts}] SEARCH (cached): "${request.query.substring(0, 60)}"`);
+    return cached;
+  }
 
   const timestamp = new Date().toISOString().replace("T", " ").split(".")[0];
   const startTime = Date.now();
@@ -188,7 +236,7 @@ export async function search(request: SearchRequest): Promise<SearchResponse> {
   }
 
   // Step 5: Reranking — only when top scores are close (worth reordering)
-  if (config.search.reranking.enabled && (isRerankerAvailable() || config.reranker?.mode === "onnx-sidecar")) {
+  if (config.search.reranking.enabled && isRerankerAvailable()) {
     const topCandidates = candidates.slice(0, config.search.reranking.candidateCount);
     // Skip reranking if top result is already dominant (>0.08 gap to #2)
     const scoreDiff = topCandidates.length >= 2
@@ -257,12 +305,17 @@ export async function search(request: SearchRequest): Promise<SearchResponse> {
     console.log(`  #${i + 1} [${r.score.toFixed(3)}] ${r.citation}`);
   });
 
-  return {
+  const response: SearchResponse = {
     results: searchResults,
     query: request.query,
     expandedQueries,
     timings,
   };
+
+  // Cache the result
+  setCache(request, response);
+
+  return response;
 }
 
 // ============================================================================
@@ -430,7 +483,15 @@ function mergeAdditionalVector(
 
 async function rerankCandidates(query: string, candidates: ScoredChunk[]): Promise<ScoredChunk[]> {
   const documents = candidates.map(c => c.text);
-  const rerankScores = await scoreRelevanceBatch(query, documents);
+  const result = await rerankDocuments(query, documents);
+
+  if (!result) {
+    // Reranker unavailable, return candidates as-is
+    console.log("  Reranker unavailable, skipping");
+    return candidates;
+  }
+
+  const { scores: rerankScores } = result;
 
   // Normalize cross-encoder logits to [0, 1] using sigmoid
   const sigmoid = (x: number) => 1 / (1 + Math.exp(-x));
@@ -440,9 +501,7 @@ async function rerankCandidates(query: string, candidates: ScoredChunk[]): Promi
   const reranked = candidates.map((chunk, i) => ({
     ...chunk,
     rerankScore: normalizedScores[i],
-    score: rerankScores[i] !== 0
-      ? 0.6 * normalizedScores[i] + 0.4 * chunk.score
-      : chunk.score, // If reranker returned 0, keep original (sidecar unavailable)
+    score: 0.6 * normalizedScores[i] + 0.4 * chunk.score,
   }));
 
   reranked.sort((a, b) => b.score - a.score);

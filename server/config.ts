@@ -41,7 +41,7 @@ export function loadConfig(configPath?: string): Config {
   }
   if (process.env.RERANKER_MODE) {
     config.reranker = config.reranker || { mode: "none" };
-    config.reranker.mode = process.env.RERANKER_MODE as "lmstudio" | "none";
+    config.reranker.mode = process.env.RERANKER_MODE as "sidecar" | "lmstudio" | "none";
   }
   if (process.env.RERANKER_MODEL) {
     config.reranker = config.reranker || { mode: "lmstudio" };

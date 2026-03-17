@@ -1,196 +1,196 @@
 {
-  "port": 7420,
-  "lmstudio": {
-    "baseUrl": "http://localhost:1234/v1",
-    "embeddingModel": "text-embedding-qwen3-embedding-4b",
-    "chatModel": "qwen2.5-1.5b-instruct-mlx"
-  },
-  "reranker": {
-    "mode": "none"
-  },
-  "collections": [
-    {
-      "name": "workspace",
-      "path": "~/.lobs/workspace",
-      "pattern": "**/*.md"
+    "port": 7420,
+    "lmstudio": {
+        "baseUrl": "http://localhost:1234/v1",
+        "embeddingModel": "text-embedding-qwen3-embedding-4b",
+        "chatModel": "qwen2.5-1.5b-instruct-mlx"
     },
-    {
-      "name": "knowledge",
-      "path": "~/lobs/lobs-shared-memory",
-      "pattern": "**/*.md"
+    "reranker": {
+        "mode": "sidecar"
     },
-    {
-      "name": "sessions",
-      "path": "~/.lobs/agents/main/sessions",
-      "pattern": "*.jsonl"
+    "collections": [
+        {
+            "name": "workspace",
+            "path": "~/.lobs/workspace",
+            "pattern": "**/*.md"
+        },
+        {
+            "name": "knowledge",
+            "path": "~/lobs/lobs-shared-memory",
+            "pattern": "**/*.md"
+        },
+        {
+            "name": "sessions",
+            "path": "~/.lobs/agents/main/sessions",
+            "pattern": "*.jsonl"
+        },
+        {
+            "name": "paw-hub",
+            "path": "~/paw/paw-hub",
+            "pattern": "**/*.md",
+            "exclude": [
+                "node_modules/**",
+                ".git/**",
+                "dist/**",
+                "build/**",
+                "**/venv/**",
+                "**/site-packages/**"
+            ]
+        },
+        {
+            "name": "lobs-mobile",
+            "path": "~/lobs/lobs-mobile",
+            "pattern": "**/*.md",
+            "exclude": [
+                "node_modules/**",
+                ".git/**",
+                "dist/**",
+                "build/**",
+                "Pods/**",
+                ".build/**",
+                "**/venv/**",
+                "**/site-packages/**"
+            ]
+        },
+        {
+            "name": "lobs-nexus",
+            "path": "~/lobs/lobs-nexus",
+            "pattern": "**/*.md",
+            "exclude": [
+                "node_modules/**",
+                ".git/**",
+                "dist/**",
+                "build/**",
+                "**/venv/**",
+                "**/site-packages/**"
+            ]
+        },
+        {
+            "name": "lobs-core",
+            "path": "~/lobs/lobs-core",
+            "pattern": "**/*.md",
+            "exclude": [
+                "**/node_modules/**",
+                ".git/**",
+                "dist/**",
+                "build/**",
+                "nexus/**",
+                "memory/**",
+                "**/venv/**",
+                "**/tools-venv/**",
+                "**/site-packages/**"
+            ]
+        },
+        {
+            "name": "lobs-core-memory",
+            "path": "~/lobs/lobs-core/memory",
+            "pattern": "**/*.md",
+            "exclude": [
+                "node_modules/**",
+                ".git/**",
+                "dist/**",
+                "build/**"
+            ]
+        },
+        {
+            "name": "paw-designs",
+            "path": "~/paw/paw-designs",
+            "pattern": "**/*.md",
+            "exclude": [
+                "node_modules/**",
+                ".git/**",
+                "dist/**",
+                "build/**"
+            ]
+        },
+        {
+            "name": "bot-shared",
+            "path": "~/paw/bot-shared",
+            "pattern": "**/*.md",
+            "exclude": [
+                "node_modules/**",
+                ".git/**",
+                "dist/**",
+                "build/**"
+            ]
+        },
+        {
+            "name": "ship-api",
+            "path": "~/ship-api",
+            "pattern": "**/*.md",
+            "exclude": [
+                "node_modules/**",
+                ".git/**",
+                "dist/**",
+                "build/**",
+                "**/venv/**",
+                "**/site-packages/**"
+            ]
+        },
+        {
+            "name": "lobs-sail",
+            "path": "~/lobs-sail",
+            "pattern": "**/*.md",
+            "exclude": [
+                "node_modules/**",
+                ".git/**",
+                "dist/**",
+                "build/**"
+            ]
+        },
+        {
+            "name": "lobs-sets-sail",
+            "path": "~/paw/lobs-sets-sail",
+            "pattern": "**/*.md",
+            "exclude": [
+                "**/node_modules/**",
+                ".git/**",
+                "dist/**",
+                "build/**",
+                "**/venv/**",
+                "**/site-packages/**"
+            ]
+        },
+        {
+            "name": "lobslab-infra",
+            "path": "~/lobs/lobslab-infra",
+            "pattern": "**/*.md",
+            "exclude": [
+                ".git/**",
+                "**/venv/**",
+                "**/site-packages/**"
+            ]
+        }
+    ],
+    "search": {
+        "vectorWeight": 0.7,
+        "textWeight": 0.3,
+        "candidateMultiplier": 4,
+        "maxResults": 8,
+        "mmr": {
+            "enabled": true,
+            "lambda": 0.7
+        },
+        "temporalDecay": {
+            "enabled": true,
+            "halfLifeDays": 30
+        },
+        "reranking": {
+            "enabled": true,
+            "candidateCount": 20
+        },
+        "queryExpansion": {
+            "enabled": false,
+            "strongSignalThreshold": 0.8
+        }
     },
-    {
-      "name": "paw-hub",
-      "path": "~/paw/paw-hub",
-      "pattern": "**/*.md",
-      "exclude": [
-        "node_modules/**",
-        ".git/**",
-        "dist/**",
-        "build/**",
-        "**/venv/**",
-        "**/site-packages/**"
-      ]
+    "chunking": {
+        "targetTokens": 300,
+        "overlapTokens": 40
     },
-    {
-      "name": "lobs-mobile",
-      "path": "~/lobs/lobs-mobile",
-      "pattern": "**/*.md",
-      "exclude": [
-        "node_modules/**",
-        ".git/**",
-        "dist/**",
-        "build/**",
-        "Pods/**",
-        ".build/**",
-        "**/venv/**",
-        "**/site-packages/**"
-      ]
-    },
-    {
-      "name": "lobs-nexus",
-      "path": "~/lobs/lobs-nexus",
-      "pattern": "**/*.md",
-      "exclude": [
-        "node_modules/**",
-        ".git/**",
-        "dist/**",
-        "build/**",
-        "**/venv/**",
-        "**/site-packages/**"
-      ]
-    },
-    {
-      "name": "lobs-core",
-      "path": "~/lobs/lobs-core",
-      "pattern": "**/*.md",
-      "exclude": [
-        "**/node_modules/**",
-        ".git/**",
-        "dist/**",
-        "build/**",
-        "nexus/**",
-        "memory/**",
-        "**/venv/**",
-        "**/tools-venv/**",
-        "**/site-packages/**"
-      ]
-    },
-    {
-      "name": "lobs-core-memory",
-      "path": "~/lobs/lobs-core/memory",
-      "pattern": "**/*.md",
-      "exclude": [
-        "node_modules/**",
-        ".git/**",
-        "dist/**",
-        "build/**"
-      ]
-    },
-    {
-      "name": "paw-designs",
-      "path": "~/paw/paw-designs",
-      "pattern": "**/*.md",
-      "exclude": [
-        "node_modules/**",
-        ".git/**",
-        "dist/**",
-        "build/**"
-      ]
-    },
-    {
-      "name": "bot-shared",
-      "path": "~/paw/bot-shared",
-      "pattern": "**/*.md",
-      "exclude": [
-        "node_modules/**",
-        ".git/**",
-        "dist/**",
-        "build/**"
-      ]
-    },
-    {
-      "name": "ship-api",
-      "path": "~/ship-api",
-      "pattern": "**/*.md",
-      "exclude": [
-        "node_modules/**",
-        ".git/**",
-        "dist/**",
-        "build/**",
-        "**/venv/**",
-        "**/site-packages/**"
-      ]
-    },
-    {
-      "name": "lobs-sail",
-      "path": "~/lobs-sail",
-      "pattern": "**/*.md",
-      "exclude": [
-        "node_modules/**",
-        ".git/**",
-        "dist/**",
-        "build/**"
-      ]
-    },
-    {
-      "name": "lobs-sets-sail",
-      "path": "~/paw/lobs-sets-sail",
-      "pattern": "**/*.md",
-      "exclude": [
-        "node_modules/**",
-        ".git/**",
-        "dist/**",
-        "build/**",
-        "**/venv/**",
-        "**/site-packages/**"
-      ]
-    },
-    {
-      "name": "lobslab-infra",
-      "path": "~/lobs/lobslab-infra",
-      "pattern": "**/*.md",
-      "exclude": [
-        ".git/**",
-        "**/venv/**",
-        "**/site-packages/**"
-      ]
+    "indexing": {
+        "debounceMs": 2000,
+        "watchEnabled": true,
+        "syncIntervalMs": 300000
     }
-  ],
-  "search": {
-    "vectorWeight": 0.7,
-    "textWeight": 0.3,
-    "candidateMultiplier": 4,
-    "maxResults": 8,
-    "mmr": {
-      "enabled": true,
-      "lambda": 0.7
-    },
-    "temporalDecay": {
-      "enabled": true,
-      "halfLifeDays": 30
-    },
-    "reranking": {
-      "enabled": false,
-      "candidateCount": 15
-    },
-    "queryExpansion": {
-      "enabled": false,
-      "strongSignalThreshold": 0.8
-    }
-  },
-  "chunking": {
-    "targetTokens": 300,
-    "overlapTokens": 40
-  },
-  "indexing": {
-    "debounceMs": 2000,
-    "watchEnabled": true,
-    "syncIntervalMs": 300000
-  }
 }

@@ -6,9 +6,9 @@
  */
 
 import { loadConfig } from "./config.js";
-import { initDb, getIndexStats, closeDb, queryGraph, getDb } from "./db.js";
+import { initDb, getIndexStats, getDetailedStats, closeDb, queryGraph, getDb } from "./db.js";
 import { initEmbedder, checkEmbedderHealth } from "./embedder.js";
-import { initReranker, isRerankerAvailable, getRerankerStatus, disposeReranker } from "./reranker.js";
+import { initReranker, isRerankerAvailable, shutdownReranker } from "./reranker.js";
 import { initSearch, search } from "./search.js";
 import { startIndexer, stopIndexer, getIndexerStatus, reindexAll } from "./indexer.js";
 import { extractSnippet } from "./chunker.js";
@@ -39,15 +39,8 @@ async function startup() {
     console.log("✓ Embedder ready");
   }
 
-  // 4. Initialize reranker (node-llama-cpp)
+  // 4. Initialize reranker (ONNX sidecar)
   await initReranker(config);
-  const rerankerStatus = getRerankerStatus();
-  if (!rerankerStatus.available) {
-    console.warn(`⚠️  Reranker unavailable: ${rerankerStatus.error || "not configured"}`);
-    console.warn("Searches will work but without neural reranking");
-  } else {
-    console.log("✓ Reranker ready");
-  }
 
   // 5. Initialize search pipeline
   initSearch(config);
@@ -75,7 +68,7 @@ async function startup() {
           
           const stats = getIndexStats();
           const embedderHealth = await checkEmbedderHealth();
-          const rerankerStatus = getRerankerStatus();
+          const rerankerAvailable = isRerankerAvailable();
 
           const health: HealthResponse = {
             status: embedderHealth.available ? "ok" : "degraded",
@@ -86,11 +79,8 @@ async function startup() {
                 model: config.lmstudio.embeddingModel,
               },
               reranker: {
-                loaded: rerankerStatus.available,
-                mode: rerankerStatus.mode || "none",
-                model: config.reranker?.mode === "lmstudio" 
-                  ? config.reranker.lmstudio?.model || config.lmstudio.chatModel
-                  : undefined,
+                loaded: rerankerAvailable,
+                mode: config.reranker?.mode || "none",
               },
               queryExpansion: {
                 loaded: false,
@@ -187,7 +177,7 @@ async function startup() {
           const status = {
             uptime: Math.floor((Date.now() - startTime) / 1000),
             embedder: embedderHealth,
-            reranker: getRerankerStatus(),
+            reranker: { available: isRerankerAvailable(), mode: config.reranker?.mode || "none" },
             indexer: indexerStatus,
             index: stats,
             config: {
@@ -214,6 +204,17 @@ async function startup() {
             })),
           };
           return new Response(JSON.stringify(collections, null, 2), { headers });
+        }
+
+        // Detailed stats
+        if (path === "/stats" && req.method === "GET") {
+          const stats = getDetailedStats();
+          const indexStats = getIndexStats();
+          return new Response(JSON.stringify({
+            ...indexStats,
+            ...stats,
+            reranker: { available: isRerankerAvailable(), mode: config.reranker?.mode || "none" },
+          }, null, 2), { headers });
         }
 
         // Graph query (Feature 4)
@@ -316,10 +317,8 @@ async function startup() {
   // Log model configuration
   console.log(`\nModels:`);
   console.log(`  Embedding: ${config.lmstudio.embeddingModel} via LM Studio (${config.lmstudio.baseUrl})`);
-  const rerankerInfo = config.reranker?.mode === "lmstudio" 
-    ? `LM Studio chat (${config.reranker.lmstudio?.model || config.lmstudio.chatModel})`
-    : "disabled";
-  console.log(`  Reranker: ${rerankerInfo} ${rerankerStatus.available ? "✓" : "✗"}`);
+  const rerankerMode = config.reranker?.mode || "none";
+  console.log(`  Reranker: ${rerankerMode} ${rerankerMode !== "none" ? "(auto-managed)" : ""}`);
   
   console.log(`\nSearch config:`);
   console.log(`  Vector weight: ${config.search.vectorWeight}, Text weight: ${config.search.textWeight}`);
@@ -349,7 +348,7 @@ process.on("SIGINT", shutdown);
 async function shutdown() {
   console.log("\nShutting down...");
   await stopIndexer();
-  await disposeReranker();
+  shutdownReranker();
   closeDb();
   console.log("Goodbye!");
   process.exit(0);

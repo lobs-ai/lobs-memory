@@ -24,7 +24,7 @@ import {
 } from "./db.js";
 import { chunkMarkdown } from "./chunker.js";
 import { embedBatch } from "./embedder.js";
-import { clearFileCache } from "./search.js";
+import { clearFileCache, invalidateSearchCache } from "./search.js";
 import { parseFile } from "./parsers.js";
 import { patternExtract } from "./entities.js";
 import { extractRelationships } from "./graph.js";
@@ -311,6 +311,7 @@ async function indexFile(path: string, collectionName: string): Promise<boolean>
 
     // Clear file from search cache
     clearFileCache(path);
+    invalidateSearchCache();
     
     return true;
   } catch (err) {

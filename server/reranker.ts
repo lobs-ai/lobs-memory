@@ -4,126 +4,205 @@
  * The sidecar runs at localhost:7421 and takes (query, documents[]) pairs,
  * returning real relevance scores from a proper cross-encoder model.
  * 
- * Falls back gracefully if the sidecar isn't running.
+ * Auto-starts the sidecar if configured and falls back gracefully if unavailable.
  */
 
+import { spawn, type Subprocess } from "bun";
+import { join } from "path";
 import type { Config } from "./types.js";
 
 const RERANKER_URL = "http://localhost:7421";
+const STARTUP_TIMEOUT_MS = 30_000;
+const HEALTH_CHECK_INTERVAL_MS = 500;
 
 interface RerankerState {
-  config: Config | null;
-  available: boolean;
-  error?: string;
+  configured: boolean;
+  healthy: boolean;
+  lastCheck: number;
+  process: Subprocess | null;
+  startAttempts: number;
 }
 
 const state: RerankerState = {
-  config: null,
-  available: false,
+  configured: false,
+  healthy: false,
+  lastCheck: 0,
+  process: null,
+  startAttempts: 0,
 };
 
-/**
- * Initialize reranker. Check if the ONNX sidecar is running.
- */
 export async function initReranker(config: Config): Promise<void> {
-  state.config = config;
+  const mode = config.reranker?.mode ?? "none";
+  state.configured = mode === "sidecar";
 
-  if (!config.reranker?.mode || config.reranker.mode === "none") {
-    console.warn("Reranker disabled (mode=none)");
-    state.available = false;
+  if (!state.configured) {
+    console.log("Reranker: disabled (mode=none)");
     return;
   }
 
-  if (config.reranker.mode === "onnx-sidecar") {
-    try {
-      const response = await fetch(`${RERANKER_URL}/health`, {
-        signal: AbortSignal.timeout(2000),
-      });
-      if (!response.ok) throw new Error(`Sidecar returned ${response.status}`);
-      const data = await response.json() as { status: string; model: string };
-      state.available = true;
-      console.log(`Reranker ready (ONNX sidecar: ${data.model})`);
-    } catch (err) {
-      console.warn(`⚠️  Reranker sidecar unavailable: ${err instanceof Error ? err.message : String(err)}`);
-      state.available = false;
-      state.error = err instanceof Error ? err.message : String(err);
+  console.log("Reranker: sidecar mode — will auto-start");
+  // Try to connect to existing sidecar or start one
+  await startOrConnect();
+}
+
+async function startOrConnect(): Promise<void> {
+  // First check if sidecar is already running
+  if (await checkHealth()) {
+    console.log("Reranker: connected to existing sidecar");
+    return;
+  }
+
+  // Start the sidecar
+  await startSidecar();
+}
+
+async function startSidecar(): Promise<void> {
+  state.startAttempts++;
+  if (state.startAttempts > 3) {
+    console.error("Reranker: too many start attempts, giving up");
+    state.configured = false;
+    return;
+  }
+
+  const scriptPath = join(import.meta.dir, "..", "scripts", "reranker-server.py");
+  console.log(`Reranker: starting sidecar (attempt ${state.startAttempts})...`);
+
+  try {
+    state.process = spawn({
+      cmd: ["python3", scriptPath],
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+
+    // Stream stdout/stderr for debugging
+    if (state.process.stdout) {
+      const reader = state.process.stdout.getReader();
+      (async () => {
+        const decoder = new TextDecoder();
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          const text = decoder.decode(value).trim();
+          if (text) console.log(`[reranker] ${text}`);
+        }
+      })();
     }
-  } else if (config.reranker.mode === "lmstudio") {
-    // Legacy LM Studio mode — kept for reference but not recommended
-    // (1.5B models can't do relevance scoring, they just count)
-    console.warn("Reranker: LM Studio mode not recommended (use onnx-sidecar instead)");
-    state.available = false;
-  } else {
-    console.warn(`Unknown reranker mode: ${config.reranker.mode}`);
-    state.available = false;
+    if (state.process.stderr) {
+      const reader = state.process.stderr.getReader();
+      (async () => {
+        const decoder = new TextDecoder();
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          const text = decoder.decode(value).trim();
+          if (text) console.error(`[reranker/err] ${text}`);
+        }
+      })();
+    }
+
+    // Wait for it to become healthy
+    const start = Date.now();
+    while (Date.now() - start < STARTUP_TIMEOUT_MS) {
+      await new Promise(r => setTimeout(r, HEALTH_CHECK_INTERVAL_MS));
+      if (await checkHealth()) {
+        console.log(`Reranker: sidecar ready (${Date.now() - start}ms startup)`);
+        state.startAttempts = 0;
+        return;
+      }
+    }
+
+    console.error("Reranker: sidecar startup timeout");
+    killSidecar();
+  } catch (err) {
+    console.error("Reranker: failed to start sidecar:", err);
   }
 }
 
-/**
- * Score a batch of (query, document) pairs using the ONNX cross-encoder sidecar.
- * Returns raw logit scores (higher = more relevant, can be negative).
- */
-export async function scoreRelevanceBatch(query: string, documents: string[]): Promise<number[]> {
-  if (!state.config || state.config.reranker?.mode === "none") {
-    return documents.map(() => 0);
-  }
-
-  if (documents.length === 0) return [];
-
-  // Lazy connect: if not available yet, try once (sidecar may have started late)
-  if (!state.available && state.config.reranker?.mode === "onnx-sidecar") {
+function killSidecar(): void {
+  if (state.process) {
     try {
-      const resp = await fetch(`${RERANKER_URL}/health`, { signal: AbortSignal.timeout(1000) });
-      if (resp.ok) {
-        state.available = true;
-        state.error = undefined;
-        console.log("Reranker sidecar connected (lazy init)");
-      }
-    } catch { /* still not ready, fall through */ }
-  }
-
-  if (!state.available) {
-    return documents.map(() => 0);
-  }
-
-  try {
-    const response = await fetch(`${RERANKER_URL}/rerank`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        query,
-        documents: documents.map(d => d.split(/\s+/).slice(0, 60).join(" ")), // First ~60 words
-      }),
-      signal: AbortSignal.timeout(3000),
-    });
-
-    if (!response.ok) {
-      console.error(`Reranker sidecar error: ${response.status}`);
-      return documents.map(() => 0);
+      state.process.kill();
+    } catch {
+      // Already dead
     }
+    state.process = null;
+  }
+}
 
-    const data = await response.json() as { scores: number[]; elapsed_ms: number };
-    console.log(`  Reranking: ${data.elapsed_ms}ms for ${documents.length} docs`);
-    return data.scores;
-  } catch (err) {
-    console.warn(`Reranking error: ${err instanceof Error ? err.message : String(err)}`);
-    return documents.map(() => 0);
+async function checkHealth(): Promise<boolean> {
+  try {
+    const res = await fetch(`${RERANKER_URL}/health`, {
+      signal: AbortSignal.timeout(2000),
+    });
+    const ok = res.ok;
+    state.healthy = ok;
+    state.lastCheck = Date.now();
+    return ok;
+  } catch {
+    state.healthy = false;
+    state.lastCheck = Date.now();
+    return false;
   }
 }
 
 export function isRerankerAvailable(): boolean {
-  return state.available;
+  return state.configured && state.healthy;
 }
 
-export function getRerankerStatus(): { available: boolean; error?: string; mode?: string } {
-  return {
-    available: state.available,
-    error: state.error,
-    mode: state.config?.reranker?.mode || "none",
-  };
+export interface RerankerResult {
+  scores: number[];
+  elapsed_ms: number;
 }
 
-export async function disposeReranker(): Promise<void> {
-  state.config = null;
-  state.available = false;
+/**
+ * Rerank documents against a query using the cross-encoder sidecar.
+ * Returns null if reranker is unavailable (graceful fallback).
+ */
+export async function rerankDocuments(
+  query: string,
+  documents: string[]
+): Promise<RerankerResult | null> {
+  if (!state.configured || documents.length === 0) return null;
+
+  // Periodic health check (every 30s)
+  if (Date.now() - state.lastCheck > 30_000) {
+    await checkHealth();
+  }
+
+  if (!state.healthy) {
+    // Try to restart if we're configured but unhealthy
+    if (state.process === null && state.startAttempts < 3) {
+      console.log("Reranker: attempting restart...");
+      await startSidecar();
+    }
+    if (!state.healthy) return null;
+  }
+
+  try {
+    const res = await fetch(`${RERANKER_URL}/rerank`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ query, documents }),
+      signal: AbortSignal.timeout(10_000),
+    });
+
+    if (!res.ok) {
+      console.error(`Reranker: HTTP ${res.status}`);
+      return null;
+    }
+
+    return await res.json() as RerankerResult;
+  } catch (err) {
+    console.error("Reranker: request failed:", err);
+    state.healthy = false;
+    return null;
+  }
+}
+
+/**
+ * Clean up the sidecar process on shutdown.
+ */
+export function shutdownReranker(): void {
+  killSidecar();
+  console.log("Reranker: shutdown");
 }

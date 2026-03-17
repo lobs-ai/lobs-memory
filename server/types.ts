@@ -8,7 +8,7 @@ export interface Config {
     chatModel: string;
   };
   reranker?: {
-    mode: "lmstudio" | "none";
+    mode: "sidecar" | "lmstudio" | "none";
     lmstudio?: {
       model: string;
     };

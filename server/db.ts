@@ -446,6 +446,46 @@ export function getIndexStats() {
   };
 }
 
+export function getDetailedStats() {
+  const collections = db!.prepare(`
+    SELECT 
+      d.collection,
+      COUNT(DISTINCT d.id) as documents,
+      COUNT(c.id) as chunks,
+      MAX(d.updated_at) as lastUpdate,
+      SUM(c.token_count) as totalTokens
+    FROM documents d
+    LEFT JOIN chunks c ON c.doc_id = d.id
+    GROUP BY d.collection
+    ORDER BY d.collection
+  `).all() as Array<{
+    collection: string;
+    documents: number;
+    chunks: number;
+    lastUpdate: string | null;
+    totalTokens: number | null;
+  }>;
+
+  const embeddingCount = db!.prepare("SELECT COUNT(*) as count FROM chunk_embeddings").get() as { count: number };
+  const cacheCount = db!.prepare("SELECT COUNT(*) as count FROM embedding_cache").get() as { count: number };
+
+  // DB file size
+  const dbPath = db!.filename;
+  let dbSizeBytes = 0;
+  try {
+    const { statSync } = require("fs");
+    dbSizeBytes = statSync(dbPath).size;
+  } catch { /* ignore */ }
+
+  return {
+    collections,
+    embeddings: embeddingCount.count,
+    embeddingCache: cacheCount.count,
+    dbSizeBytes,
+    dbSizeMB: Math.round(dbSizeBytes / 1024 / 1024 * 10) / 10,
+  };
+}
+
 export function closeDb(): void {
   if (db) {
     db.close();
