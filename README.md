@@ -15,7 +15,7 @@ Persistent memory search server with neural reranking and hybrid search (BM25 + 
 ## Requirements
 
 - **Bun** runtime
-- **LM Studio** running on localhost:1234 with `text-embedding-nomic-embed-text-v1.5` loaded
+- **LM Studio** running locally on `localhost:1234` with `text-embedding-qwen3-embedding-4b` loaded
 - **Reranker GGUF** (optional): `~/.cache/qmd/models/hf_ggml-org_qwen3-reranker-0.6b-q8_0.gguf`
 
 ## Installation
@@ -30,11 +30,11 @@ Edit `config.json` or set environment variables:
 
 ```json
 {
-  "port": 7420,
-  "lmstudio": {
-    "baseUrl": "http://localhost:1234/v1",
-    "embeddingModel": "text-embedding-nomic-embed-text-v1.5"
-  },
+    "port": 7420,
+    "lmstudio": {
+      "baseUrl": "http://localhost:1234/v1",
+      "embeddingModel": "text-embedding-qwen3-embedding-4b"
+    },
   "models": {
     "reranker": "~/.cache/qmd/models/hf_ggml-org_qwen3-reranker-0.6b-q8_0.gguf"
   },
@@ -159,7 +159,7 @@ sqlite3 ~/.lobs/plugins/lobs-memory/index.db "SELECT COUNT(*) FROM documents;"
 
 **LM Studio connection errors:**
 - Make sure LM Studio is running on localhost:1234
-- Check that `text-embedding-nomic-embed-text-v1.5` is loaded in LM Studio
+- Check that `text-embedding-qwen3-embedding-4b` is loaded in LM Studio
 
 **Reranker not loading:**
 - Check that the GGUF file exists at the configured path
