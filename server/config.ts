@@ -49,6 +49,13 @@ export function loadConfig(configPath?: string): Config {
     config.reranker.lmstudio.model = process.env.RERANKER_MODEL;
   }
 
+  // Keep memory embeddings local-only by default.
+  const baseUrl = config.lmstudio?.baseUrl ?? "";
+  if (baseUrl && !isLocalBaseUrl(baseUrl)) {
+    console.warn(`Non-local LM Studio base URL configured for lobs-memory (${baseUrl}); falling back to localhost for local-only embeddings.`);
+    config.lmstudio.baseUrl = "http://localhost:1234/v1";
+  }
+
   // Expand tildes in paths
   if (config.collections) {
     for (const col of config.collections) {
@@ -64,7 +71,7 @@ function getDefaultConfig(): Config {
     port: 7420,
     lmstudio: {
       baseUrl: "http://localhost:1234/v1",
-      embeddingModel: "text-embedding-nomic-embed-text-v1.5",
+      embeddingModel: "text-embedding-qwen3-embedding-4b",
       chatModel: "qwen/qwen3.5-9b",
     },
     reranker: {
@@ -97,6 +104,16 @@ function getDefaultConfig(): Config {
     indexing: {
       debounceMs: 2000,
       watchEnabled: true,
+      syncIntervalMs: 15 * 60 * 1000,
     },
   };
+}
+
+function isLocalBaseUrl(baseUrl: string): boolean {
+  try {
+    const url = new URL(baseUrl);
+    return ["localhost", "127.0.0.1", "::1"].includes(url.hostname);
+  } catch {
+    return false;
+  }
 }
