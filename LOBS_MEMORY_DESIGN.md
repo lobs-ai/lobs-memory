@@ -179,6 +179,7 @@ CREATE TABLE events (
   metadata TEXT,                     -- JSON: tool name, file paths, error codes, etc.
   scope TEXT NOT NULL DEFAULT 'session',  -- 'system', 'agent', 'session'
   project_id TEXT,                   -- optional project association
+  signal_score REAL NOT NULL DEFAULT 0.5,  -- 0.0-1.0, event importance for indexing (§7.1)
   
   -- Indexing
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
@@ -188,6 +189,7 @@ CREATE INDEX idx_events_agent ON events(agent_id, timestamp);
 CREATE INDEX idx_events_type ON events(event_type);
 CREATE INDEX idx_events_session ON events(session_id);
 CREATE INDEX idx_events_project ON events(project_id);
+CREATE INDEX idx_events_signal ON events(signal_score) WHERE signal_score > 0.5;
 ```
 
 ### 4.2 Memories (Derived)
@@ -202,6 +204,13 @@ CREATE TABLE memories (
   agent_type TEXT,                   -- which agent type this applies to (null = all)
   project_id TEXT,                   -- optional project scope
   
+  -- Authority (determines conflict resolution priority)
+  source_authority INTEGER NOT NULL DEFAULT 1,
+  -- 3 = user (Rafe said it directly)
+  -- 2 = system/verified outcome (observed result of an action)
+  -- 1 = agent inference (agent concluded this)
+  -- 0 = reflection-derived (auto-extracted from event patterns)
+  
   -- Lifecycle
   status TEXT NOT NULL DEFAULT 'active',  -- 'active', 'superseded', 'contested', 'archived'
   superseded_by INTEGER,             -- FK to newer memory that replaces this one
@@ -211,8 +220,11 @@ CREATE TABLE memories (
   last_validated TEXT,               -- when last confirmed by new evidence
   expires_at TEXT,                   -- optional TTL (e.g., session-scoped memories)
   
-  -- Search
-  embedding BLOB,                   -- vector embedding for semantic search
+  -- Access tracking (for dead memory detection + usage-based prioritization)
+  last_accessed TEXT,                -- last time this memory was retrieved in a search
+  access_count INTEGER NOT NULL DEFAULT 0,  -- total retrieval count
+  
+  -- Note: embeddings stored in separate memory_embeddings table (§4.2.1)
   
   created_at TEXT NOT NULL DEFAULT (datetime('now')),
   updated_at TEXT NOT NULL DEFAULT (datetime('now'))
@@ -222,7 +234,21 @@ CREATE INDEX idx_memories_type ON memories(memory_type, status);
 CREATE INDEX idx_memories_scope ON memories(scope, agent_type);
 CREATE INDEX idx_memories_project ON memories(project_id);
 CREATE INDEX idx_memories_status ON memories(status);
+CREATE INDEX idx_memories_access ON memories(last_accessed);  -- for dead memory queries
 ```
+
+### 4.2.1 Memory Embeddings (Separate Table)
+
+Embeddings are stored separately from the main memories table to keep scans fast and make it trivial to swap vector backends later.
+
+```sql
+CREATE TABLE memory_embeddings (
+  memory_id INTEGER PRIMARY KEY REFERENCES memories(id),
+  embedding BLOB NOT NULL           -- vector embedding for semantic search
+);
+```
+
+The `memories` table has no `embedding` column — all vector operations go through `memory_embeddings`. This keeps the main table small and scannable.
 
 ### 4.3 Evidence Links
 
@@ -266,22 +292,42 @@ Reflection transforms raw events into structured memories. It runs on a schedule
 | Daily condensation | Once per day (existing condenser schedule) | All events from past day |
 | Manual | On-demand via tool or CLI | Specified event range |
 
-### 5.2 Reflection Process
+### 5.2 Episode Clustering (Deterministic v1)
+
+Clustering is where reflection systems silently fail. We start with deterministic rules — no LLM clustering.
+
+**Grouping rules (applied in order):**
+
+1. **Same `session_id`** → always same cluster
+2. **Same `project_id` AND time gap < 10 minutes** → same cluster
+3. **Strong entity overlap (≥2 shared entities)** → merge clusters
+
+**Split rules:**
+
+1. **Time gap > 30 minutes** → force split (even within session)
+2. **New `user_input` event after a gap > 5 minutes** → new cluster (likely new intent)
+
+LLM-based topic detection is explicitly deferred to a later version. It would add cost, instability, and inconsistent grouping. Rule-based clustering is good enough for v1 and produces reproducible results.
+
+### 5.3 Reflection Process
 
 ```
 1. Gather unreflected events (events not yet linked to any memory)
-2. Cluster related events (by session, project, topic)
+2. Cluster events using deterministic rules (§5.2)
 3. For each cluster:
-   a. Extract candidate memories (pattern detection)
-   b. Check against existing memories:
-      - If reinforcing: bump confidence, add evidence link
-      - If contradicting: create conflict record, flag for review
-      - If novel: create new memory if evidence threshold met
-4. Update memory confidence scores
-5. Mark events as reflected
+   a. Extract candidate memories (pattern detection via local LLM)
+   b. Dedup against existing memories:
+      - If similarity(existing, candidate) > 0.9 → reinforce existing (bump confidence, add evidence)
+      - If contradicting → create conflict record, apply auto-resolution rules (§8.3.1)
+      - If novel AND evidence threshold met → create new memory
+   c. Enforce per-episode limit: max 5 new memories per cluster
+4. Enforce daily limit: max N memories per day (configurable, default 50)
+5. Update memory confidence scores
+6. Update access tracking on all memories surfaced during reflection
+7. Mark events as reflected
 ```
 
-### 5.3 Evidence Thresholds
+### 5.4 Evidence Thresholds
 
 | Memory Type | Min Events | Min Confidence | Notes |
 |------------|-----------|----------------|-------|
@@ -291,7 +337,7 @@ Reflection transforms raw events into structured memories. It runs on a schedule
 | Preference | 2 | 0.7 | User preferences escalate quickly |
 | Fact | 1 | 0.9 | Facts are high-confidence, low-evidence |
 
-### 5.4 Confidence Decay
+### 5.5 Confidence Decay
 
 Memories that aren't reinforced by new evidence decay slowly:
 
@@ -307,9 +353,39 @@ confidence(t) = base_confidence * (0.5 ^ (days_since_last_validation / half_life
 
 ## 6. Search Integration
 
-### 6.1 Unified Search
+### 6.1 Two-Tier Query Pipeline
 
-Memory search should query both the existing document index (files, markdown, code) AND the structured memories table. Results are merged and ranked together.
+Not every query needs the full pipeline. We define explicit fast and slow paths.
+
+#### Fast Path (default, target: <200ms)
+
+```
+Query → Structured memory FTS5 lookup + recent session events → Return
+```
+
+- Direct FTS5 on `memories` table (active status only)
+- Recent session events (last 24h)
+- No reranker, no query expansion, no vector search
+- Used for: "what did I decide about X?", preference lookups, recent context
+
+#### Slow Path (triggered, target: <2s)
+
+```
+Query → Full pipeline (BM25 + vector + expansion + reranking + graph) → Return
+```
+
+- Full document + memory search with all stages
+- Used for: ambiguous queries, large tasks, failure recovery, "what happened before"
+
+**Slow path triggers:**
+- Query is ambiguous (low top-1 confidence on fast path, < 0.6)
+- Explicit request ("search deeply", "what happened before")
+- Task classifier returns `research`, `debugging`, or `architecture`
+- Fast path returns < 2 results
+
+### 6.2 Unified Search (Slow Path)
+
+Memory search queries both the existing document index AND the structured memories table. Results merge and rank together.
 
 ```
 Query
@@ -318,38 +394,73 @@ Query
   │
   ├─ Memory search (new) → structured memory results
   │    ├─ FTS5 on memories.content
-  │    └─ Vector search on memories.embedding
+  │    └─ Vector search on memory_embeddings.embedding
   │
   └─ Merge + re-rank all candidates together
 ```
 
-### 6.2 Memory-Aware Scoring
+### 6.3 Memory-Aware Scoring
 
 Structured memories get scoring bonuses:
 - **Active memories:** +0.1 score boost (they're curated knowledge)
 - **High confidence:** scaled boost up to +0.15 for confidence > 0.8
 - **Scope match:** +0.1 if memory scope matches the querying agent's scope
+- **Access frequency:** minor boost for frequently-accessed memories (log-scaled `access_count`)
 - **Recency:** existing temporal decay applies
 
 Contested or superseded memories are demoted but not hidden (they provide context).
 
-### 6.3 Context Engine Integration
+**On retrieval:** Update `last_accessed` and increment `access_count` for every memory returned in search results. This is how we detect dead memory and prioritize useful memory.
 
-The context engine (`context-engine.ts`) needs minimal changes:
+### 6.4 Context Engine Integration
 
-1. Memory search results already flow through `categorizeResult()` — add a `"structured-memory"` category that maps to the `memory` budget allocation
-2. Structured memories get formatted differently in context blocks (include confidence, evidence count)
-3. Add a `memories` collection to the batch search queries
+The context engine changes are **not minimal** — they affect memory format, semantics, and importance signaling.
+
+**New memory result category:**
+1. Add `"structured-memory"` to `categorizeResult()`, mapped to the `memory` budget allocation
+2. Structured memories get distinct formatting in context blocks:
+
+```
+[Memory: learning | confidence: 0.85 | evidence: 4 | last validated: 2026-03-20]
+Always lint code before considering a task done.
+
+[Memory: pattern | confidence: 0.62 | evidence: 3 | contested]
+Subagents perform better with explicit file path lists than directory references.
+```
+
+3. This formatting is critical — it tells the model how much to trust each memory. A confidence-0.9 fact with 5 evidence links should be treated very differently from a confidence-0.5 pattern with 2.
+
+4. Add a `memories` collection to the batch search queries
 
 ## 7. Write Path
 
 ### 7.1 Event Recording
 
-Events are recorded automatically by the agent runner:
-- **Tool calls:** Each tool invocation + result becomes an event
-- **User messages:** Incoming messages become `user_input` events
-- **Agent decisions:** Explicit decisions logged as `decision` events
-- **Errors:** Failures become `error` events
+Events are recorded automatically by the agent runner with signal-based filtering.
+
+#### Signal Classification
+
+Every event gets a `signal_score` (0.0–1.0) at ingestion time:
+
+| Event Type | Signal Score | Notes |
+|-----------|-------------|-------|
+| `user_input` | 1.0 | Always significant |
+| `error` | 0.9 | Failures are important |
+| `decision` | 0.9 | Explicit decisions |
+| `observation` | 0.7 | Agent noticed something |
+| `tool_result` (meaningful) | 0.7 | Search results, file reads with key info |
+| `tool_result` (routine) | 0.3 | Generic ls, status checks |
+| `action` (file write) | 0.6 | Code/content changes |
+| `action` (navigation) | 0.2 | cd, ls, pwd |
+| streaming tokens | 0.0 | Never stored |
+
+#### Storage vs Indexing
+
+- **All events are stored** in the `events` table (ground truth is complete)
+- **Only events with `signal_score > 0.5` are indexed** for search (FTS5 + embeddings)
+- This keeps the search index focused on meaningful content while preserving full audit trail
+
+(`signal_score` column and partial index defined in the events schema, §4.1)
 
 This replaces the current `memory_write` tool for event-level data. The tool remains for explicit memory creation (agent deliberately writes a learning).
 
@@ -416,13 +527,36 @@ When agents produce conflicting memories:
 
 1. Both memories are kept with `status: 'contested'`
 2. A conflict record is created
-3. On the next main agent run, the conflict surfaces in context
-4. Main agent resolves by:
+3. Auto-resolution rules are applied (§8.3.1)
+4. If not auto-resolved, the conflict surfaces in the main agent's context on next run
+5. Main agent resolves by:
    - Choosing one (supersedes the other)
    - Merging into a new memory
    - Dismissing both
 
 Rafe can also resolve conflicts through explicit instruction.
+
+#### 8.3.1 Auto-Resolution Rules
+
+Most conflicts can be resolved without human intervention using the `source_authority` field:
+
+| Case | Rule | Example |
+|------|------|---------|
+| Same scope + newer + same or higher authority | Supersede old | Agent updates its own earlier inference |
+| User preference update (authority=3) | Always supersede | Rafe says "actually I prefer X" |
+| Higher authority contradicts lower | Supersede lower | Verified outcome overrides agent inference |
+| Same authority + low confidence (<0.5) | Mark disputed, don't replace | Two weak inferences disagree |
+| Same authority + high confidence (>0.7) | Escalate to main agent | Two strong inferences disagree — needs judgment |
+
+**Authority hierarchy:**
+```
+3 = user         (Rafe said it directly → near-absolute trust)
+2 = system       (verified outcome, observed result)
+1 = agent        (agent inference, explicit agent conclusion)
+0 = reflection   (auto-extracted from event patterns → lowest trust)
+```
+
+Auto-resolution is logged in the `conflicts` table with `resolution = 'auto: [rule applied]'`.
 
 ## 9. Implementation Plan
 
@@ -506,6 +640,25 @@ Extends the existing memory config (`~/.lobs/config/memory.json`):
       "preference": 365
     }
   },
+  "reflection": {
+    "limits": {
+      "maxPerEpisode": 5,
+      "maxPerDay": 50,
+      "dedupThreshold": 0.9
+    }
+  },
+  "search": {
+    "fastPath": {
+      "enabled": true,
+      "maxLatencyMs": 200
+    },
+    "slowPathTriggers": [
+      "lowConfidence",
+      "fewResults",
+      "researchTask",
+      "explicitRequest"
+    ]
+  },
   "collections": [
     { "name": "workspace", "path": "~/.lobs/agents", "pattern": "**/*.md" },
     { "name": "knowledge", "path": "~/lobs-shared-memory", "pattern": "**/*.md" },
@@ -516,21 +669,23 @@ Extends the existing memory config (`~/.lobs/config/memory.json`):
 
 ## 11. Open Questions
 
-1. **Event volume.** Tool calls generate a lot of events. Do we record every tool call, or only "significant" ones? A single agent run might produce 50+ tool calls. Indexing all of them could bloat the DB and slow searches.
+1. ~~**Event volume.**~~ *Resolved:* Signal scoring at ingestion (§7.1). All events stored, only high-signal events indexed for search.
 
-   *Proposed:* Record all events but mark them with granularity levels. Search defaults to coarse (decisions, errors, key findings) unless specifically asked for fine-grained.
+2. **Reflection LLM cost.** The reflection pipeline needs an LLM to extract memories from event clusters. Running this after every session could be expensive.
 
-2. **Reflection LLM cost.** The reflection pipeline needs an LLM to cluster events and extract memories. Running this after every session could be expensive.
+   *Proposed:* Use the local qwen2.5-1.5b-instruct for reflection. It's free (LMStudio), fast, and good enough for pattern extraction. Clustering is deterministic (§5.2) — the LLM only handles memory extraction from pre-clustered events. Only escalate to a larger model for conflict resolution.
 
-   *Proposed:* Use the local qwen2.5-1.5b-instruct for reflection. It's free (LMStudio), fast, and good enough for pattern extraction. Only escalate to a larger model for conflict resolution.
+3. **Embedding storage overhead.** Each memory gets a vector embedding stored in `memory_embeddings`.
 
-3. **Embedding storage overhead.** Each memory gets a vector embedding (~1536 floats = ~6KB). With thousands of memories, this adds up.
-
-   *Proposed:* Use the same embedding model already in use (nomic-embed-text-v1.5, 768 dimensions = ~3KB per memory). At 10K memories, that's ~30MB — negligible.
+   *Proposed:* Use the same embedding model already in use (nomic-embed-text-v1.5, 768 dimensions = ~3KB per memory). At 10K memories, that's ~30MB — negligible. Separate table (§4.2.1) keeps the main table fast.
 
 4. **Concurrent agent writes.** Multiple subagents might try to record events simultaneously.
 
    *Proposed:* SQLite's WAL mode handles concurrent reads well but serializes writes. For the expected concurrency (2-4 agents max), this is fine. If it becomes a bottleneck, batch writes through a queue.
+
+5. **Dead memory garbage collection.** With `last_accessed` and `access_count` tracking, we can now detect dead memories (never accessed, or not accessed in months). What's the GC policy?
+
+   *Proposed:* Memories with `access_count = 0` and `derived_at > 90 days ago` → auto-archive. Memories with `last_accessed > 180 days ago` → flag for review. Never delete — archive only.
 
 ## 12. Success Metrics
 
