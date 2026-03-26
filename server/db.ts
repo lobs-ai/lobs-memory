@@ -253,15 +253,31 @@ function cosineSimilarity(a: Float32Array, b: Float32Array): number {
   return denom === 0 ? 0 : dot / denom;
 }
 
-export function vectorSearch(queryEmbedding: Float32Array, limit: number): Array<{ chunkId: number; distance: number }> {
+export function vectorSearch(queryEmbedding: Float32Array, limit: number, collections?: string[]): Array<{ chunkId: number; distance: number }> {
   const cache = loadEmbeddingCache();
   if (cache.length === 0) return [];
 
-  // Compute cosine similarity for all chunks, return top-k
-  const scored = cache.map(entry => ({
-    chunkId: entry.chunkId,
-    similarity: cosineSimilarity(queryEmbedding, entry.embedding),
-  }));
+  // If filtering by collection, get the set of chunk IDs in those collections
+  let allowedChunkIds: Set<number> | null = null;
+  if (collections && collections.length > 0) {
+    const placeholders = collections.map(() => '?').join(',');
+    const rows = db!.prepare(`
+      SELECT c.id FROM chunks c
+      JOIN documents d ON c.doc_id = d.id
+      WHERE d.collection IN (${placeholders})
+    `).all(...collections) as Array<{ id: number }>;
+    allowedChunkIds = new Set(rows.map(r => r.id));
+  }
+
+  // Compute cosine similarity, filtering by collection if needed
+  const scored: Array<{ chunkId: number; similarity: number }> = [];
+  for (const entry of cache) {
+    if (allowedChunkIds && !allowedChunkIds.has(entry.chunkId)) continue;
+    scored.push({
+      chunkId: entry.chunkId,
+      similarity: cosineSimilarity(queryEmbedding, entry.embedding),
+    });
+  }
 
   scored.sort((a, b) => b.similarity - a.similarity);
 
@@ -294,7 +310,7 @@ function preprocessQuery(query: string): string {
 /**
  * BM25 search with improved tokenization handling
  */
-export function bm25Search(query: string, limit: number): Array<{ id: number; rank: number }> {
+export function bm25Search(query: string, limit: number, collections?: string[]): Array<{ id: number; rank: number }> {
   // Pre-process query for better matching
   const processedQuery = preprocessQuery(query);
   
@@ -306,14 +322,30 @@ export function bm25Search(query: string, limit: number): Array<{ id: number; ra
     .join(" ");
 
   try {
-    const stmt = db!.prepare(`
-      SELECT rowid as id, rank as rank
-      FROM chunks_fts
-      WHERE chunks_fts MATCH ?
-      ORDER BY rank
-      LIMIT ?
-    `);
-    return stmt.all(escapedQuery, limit) as Array<{ id: number; rank: number }>;
+    if (collections && collections.length > 0) {
+      // Collection-scoped BM25: JOIN with chunks+documents to filter
+      const placeholders = collections.map(() => '?').join(',');
+      const stmt = db!.prepare(`
+        SELECT f.rowid as id, f.rank as rank
+        FROM chunks_fts f
+        JOIN chunks c ON c.id = f.rowid
+        JOIN documents d ON d.id = c.doc_id
+        WHERE chunks_fts MATCH ?
+          AND d.collection IN (${placeholders})
+        ORDER BY f.rank
+        LIMIT ?
+      `);
+      return stmt.all(escapedQuery, ...collections, limit) as Array<{ id: number; rank: number }>;
+    } else {
+      const stmt = db!.prepare(`
+        SELECT rowid as id, rank as rank
+        FROM chunks_fts
+        WHERE chunks_fts MATCH ?
+        ORDER BY rank
+        LIMIT ?
+      `);
+      return stmt.all(escapedQuery, limit) as Array<{ id: number; rank: number }>;
+    }
   } catch (err) {
     console.error("BM25 search error (returning empty results):", err);
     return [];

@@ -6,7 +6,7 @@
         "chatModel": "qwen2.5-1.5b-instruct-mlx"
     },
     "reranker": {
-        "mode": "sidecar"
+        "mode": "none"
     },
     "collections": [
         {

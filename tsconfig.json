@@ -9,7 +9,10 @@
     "outDir": "dist",
     "rootDir": ".",
     "declaration": true,
-    "types": ["bun-types"]
+    "types": ["bun-types"],
+    "paths": {
+      "lobs/plugin-sdk/memory-core": ["./plugin/types/lobs-plugin-sdk.d.ts"]
+    }
   },
-  "include": ["server/**/*.ts", "plugin/**/*.ts"]
+  "include": ["server/**/*.ts", "plugin/**/*.ts", "plugin/types/**/*.d.ts"]
 }

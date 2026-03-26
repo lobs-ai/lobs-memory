@@ -255,7 +255,7 @@ const memoryLobsPlugin = {
     });
 
     // ── Tools: memory_search + memory_get ────────────────────────────
-    api.registerTool(
+    api.registerTool!(
       (ctx) => {
         const workspaceDir = ctx.workspaceDir || process.env.HOME + "/.lobs/workspace";
 

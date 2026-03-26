@@ -110,9 +110,28 @@ export async function search(request: SearchRequest): Promise<SearchResponse> {
   const maxResults = request.maxResults || config.search.maxResults;
   const candidateCount = maxResults * config.search.candidateMultiplier;
 
-  // Step 1: Core search — BM25 + vector on original query
+  // Resolve collection aliases upfront so DB-level filtering can use them
+  let resolvedCollections: string[] | undefined;
+  if (request.collections && request.collections.length > 0) {
+    const systemCollections = new Set(["workspace", "knowledge", "sessions"]);
+    const projectCollections = config!.collections
+      .map(c => c.name)
+      .filter(n => !systemCollections.has(n));
+
+    const expanded = new Set<string>();
+    for (const c of request.collections) {
+      if (c === "projects") {
+        projectCollections.forEach(pc => expanded.add(pc));
+      } else {
+        expanded.add(c);
+      }
+    }
+    resolvedCollections = Array.from(expanded);
+  }
+
+  // Step 1: Core search — BM25 + vector on original query (collection-scoped at DB level)
   const bm25Start = Date.now();
-  const bm25Results = bm25Search(request.query, candidateCount);
+  const bm25Results = bm25Search(request.query, candidateCount, resolvedCollections);
   timings.bm25Ms = Date.now() - bm25Start;
 
   // Vector search — gracefully degrade to BM25-only if embedder is down
@@ -122,7 +141,7 @@ export async function search(request: SearchRequest): Promise<SearchResponse> {
     try {
       const vectorStart = Date.now();
       const queryEmbedding = await embedQuery(request.query);
-      vectorResults = vectorSearch(queryEmbedding, candidateCount);
+      vectorResults = vectorSearch(queryEmbedding, candidateCount, resolvedCollections);
       timings.vectorMs = Date.now() - vectorStart;
     } catch {
       // Embedder failed mid-request — mark as down, continue with BM25 only
@@ -167,7 +186,7 @@ export async function search(request: SearchRequest): Promise<SearchResponse> {
     }
   }
 
-  // Step 2: Query expansion — add more candidates from expanded queries
+  // Step 2: Query expansion — add more candidates from expanded queries (also collection-scoped)
   let expandedQueries: string[] | undefined;
   if (config.search.queryExpansion.enabled) {
     const expansionStart = Date.now();
@@ -184,14 +203,14 @@ export async function search(request: SearchRequest): Promise<SearchResponse> {
       for (const expansion of expansions) {
         if (expansion.type === 'lex') {
           // BM25 search with expanded keywords
-          const lexResults = bm25Search(expansion.text, candidateCount);
+          const lexResults = bm25Search(expansion.text, candidateCount, resolvedCollections);
           mergeAdditionalBM25(candidates, lexResults, 0.5); // 50% weight for expansions
         } else if (canVector) {
           // vec/hyde → embed and vector search (only if embedder is up)
           try {
             const vecStart = Date.now();
             const expEmbedding = await embed(expansion.text);
-            const expResults = vectorSearch(expEmbedding, candidateCount);
+            const expResults = vectorSearch(expEmbedding, candidateCount, resolvedCollections);
             mergeAdditionalVector(candidates, expResults, 0.5); // 50% weight for expansions
             timings.vectorMs += Date.now() - vecStart;
           } catch {
@@ -215,24 +234,11 @@ export async function search(request: SearchRequest): Promise<SearchResponse> {
     candidates = candidates.filter(c => matchingChunkIds.has(c.id!));
   }
 
-  // Step 4: Collection filter (with alias expansion)
-  if (request.collections && request.collections.length > 0) {
-    // Expand "projects" alias to all non-system collection names
-    const systemCollections = new Set(["workspace", "knowledge", "sessions"]);
-    const projectCollections = config!.collections
-      .map(c => c.name)
-      .filter(n => !systemCollections.has(n));
-
-    const expandedCollections = new Set<string>();
-    for (const c of request.collections) {
-      if (c === "projects") {
-        projectCollections.forEach(pc => expandedCollections.add(pc));
-      } else {
-        expandedCollections.add(c);
-      }
-    }
-
-    candidates = candidates.filter(c => expandedCollections.has(c.collection));
+  // Step 4: Collection filter — already applied at DB level (bm25Search/vectorSearch)
+  // This is a safety net in case any candidates leaked through (e.g., from expansion merges)
+  if (resolvedCollections && resolvedCollections.length > 0) {
+    const collectionSet = new Set(resolvedCollections);
+    candidates = candidates.filter(c => collectionSet.has(c.collection));
   }
 
   // Step 5: Reranking — only when top scores are close (worth reordering)
@@ -300,7 +306,8 @@ export async function search(request: SearchRequest): Promise<SearchResponse> {
   const parts = [`bm25:${timings.bm25Ms}ms`, `vec:${timings.vectorMs}ms`];
   if (timings.expansionMs !== undefined) parts.push(`expand:${timings.expansionMs}ms`);
   if (timings.rerankMs !== undefined) parts.push(`rerank:${timings.rerankMs}ms`);
-  console.log(`[${timestamp}] SEARCH "${request.query}" → ${searchResults.length} results in ${timings.totalMs}ms (${parts.join(' ')})`);
+  const scopeLabel = resolvedCollections ? ` [${resolvedCollections.join(',')}]` : '';
+  console.log(`[${timestamp}] SEARCH "${request.query}"${scopeLabel} → ${searchResults.length} results in ${timings.totalMs}ms (${parts.join(' ')})`);
   searchResults.slice(0, 5).forEach((r, i) => {
     console.log(`  #${i + 1} [${r.score.toFixed(3)}] ${r.citation}`);
   });

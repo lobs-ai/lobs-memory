@@ -76,7 +76,7 @@ async function startSidecar(): Promise<void> {
 
     // Stream stdout/stderr for debugging
     if (state.process.stdout) {
-      const reader = state.process.stdout.getReader();
+      const reader = (state.process.stdout as ReadableStream<Uint8Array>).getReader();
       (async () => {
         const decoder = new TextDecoder();
         while (true) {
@@ -88,7 +88,7 @@ async function startSidecar(): Promise<void> {
       })();
     }
     if (state.process.stderr) {
-      const reader = state.process.stderr.getReader();
+      const reader = (state.process.stderr as ReadableStream<Uint8Array>).getReader();
       (async () => {
         const decoder = new TextDecoder();
         while (true) {

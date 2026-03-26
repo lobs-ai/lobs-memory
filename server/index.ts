@@ -49,7 +49,7 @@ async function startup() {
   // 6. Start HTTP server first (so it's responsive immediately)
   const server = Bun.serve({
     port: config.port,
-    hostname: "localhost",
+    hostname: "127.0.0.1",
 
     async fetch(req: Request): Promise<Response> {
       const url = new URL(req.url);
