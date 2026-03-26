@@ -212,7 +212,7 @@ CREATE TABLE memories (
   -- 0 = reflection-derived (auto-extracted from event patterns)
   
   -- Lifecycle
-  status TEXT NOT NULL DEFAULT 'active',  -- 'active', 'superseded', 'contested', 'archived'
+  status TEXT NOT NULL DEFAULT 'active',  -- 'active', 'stale', 'superseded', 'contested', 'archived'
   superseded_by INTEGER,             -- FK to newer memory that replaces this one
   
   -- Timestamps
@@ -223,6 +223,9 @@ CREATE TABLE memories (
   -- Access tracking (for dead memory detection + usage-based prioritization)
   last_accessed TEXT,                -- last time this memory was retrieved in a search
   access_count INTEGER NOT NULL DEFAULT 0,  -- total retrieval count
+  
+  -- Traceability
+  reflection_run_id TEXT,             -- links to the reflection run that created this memory
   
   -- Note: embeddings stored in separate memory_embeddings table (§4.2.1)
   
@@ -280,6 +283,45 @@ CREATE TABLE conflicts (
 );
 ```
 
+### 4.5 Reflection Runs (Traceability)
+
+```sql
+CREATE TABLE reflection_runs (
+  id TEXT PRIMARY KEY,               -- UUID
+  trigger TEXT NOT NULL,             -- 'session_end', 'daily', 'manual'
+  started_at TEXT NOT NULL,
+  completed_at TEXT,
+  clusters_processed INTEGER DEFAULT 0,
+  memories_created INTEGER DEFAULT 0,
+  memories_reinforced INTEGER DEFAULT 0,
+  conflicts_detected INTEGER DEFAULT 0,
+  tokens_used INTEGER DEFAULT 0,
+  tier TEXT NOT NULL DEFAULT 'local', -- 'local' or 'escalation'
+  status TEXT NOT NULL DEFAULT 'running' -- 'running', 'completed', 'failed', 'skipped'
+);
+```
+
+### 4.6 Retrieval Log (Optional, for Tuning)
+
+```sql
+CREATE TABLE retrieval_log (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  memory_id INTEGER NOT NULL REFERENCES memories(id),
+  query TEXT NOT NULL,               -- the search query that surfaced this memory
+  agent_id TEXT,
+  score REAL,                        -- relevance score at retrieval time
+  timestamp TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX idx_retrieval_memory ON retrieval_log(memory_id);
+CREATE INDEX idx_retrieval_time ON retrieval_log(timestamp);
+```
+
+This enables:
+- Debugging relevance (why did this memory surface for that query?)
+- Identifying useless memories (surfaced often but low score)
+- Tuning search scoring (which memories consistently rank high but aren't useful?)
+
 ## 5. Reflection Pipeline
 
 Reflection transforms raw events into structured memories. It runs on a schedule (not real-time) and follows strict rules.
@@ -291,6 +333,24 @@ Reflection transforms raw events into structured memories. It runs on a schedule
 | Session end | After each agent run completes | Session events |
 | Daily condensation | Once per day (existing condenser schedule) | All events from past day |
 | Manual | On-demand via tool or CLI | Specified event range |
+
+#### Skip Conditions
+
+Reflection is skipped entirely if:
+- Total events in scope < 10 (not enough signal)
+- No high-signal events (`signal_score > 0.7`) present
+- No errors, decisions, user directives, or corrections in the session
+- Daily reflection budget exhausted (`maxDailyRuns` reached)
+
+This prevents burning reflection tokens on routine sessions (e.g., simple file reads, status checks).
+
+#### Reflection Budget
+
+| Limit | Value | Scope |
+|-------|-------|-------|
+| Max tokens per session | 2k–4k | Per reflection run |
+| Max candidates per cluster | 5 | Per episode |
+| Max daily reflection runs | 50 (configurable) | Global |
 
 ### 5.2 Episode Clustering (Deterministic v1)
 
@@ -312,19 +372,31 @@ LLM-based topic detection is explicitly deferred to a later version. It would ad
 ### 5.3 Reflection Process
 
 ```
-1. Gather unreflected events (events not yet linked to any memory)
-2. Cluster events using deterministic rules (§5.2)
-3. For each cluster:
-   a. Extract candidate memories (pattern detection via local LLM)
-   b. Dedup against existing memories:
+0. Check skip conditions — abort if not worth reflecting (§5.1)
+1. Generate reflection_run_id (UUID) for traceability
+2. Gather unreflected events (events not yet linked to any memory)
+3. Cluster events using deterministic rules (§5.2)
+4. Prioritize clusters by value:
+   - Contains errors → high priority
+   - Contains decisions or user corrections → high priority
+   - Contains repeated tool failures → high priority
+   - Long session (> 50 events) → medium priority
+   - Routine activity only → skip (unless over daily event threshold)
+5. For each cluster (highest priority first, within budget):
+   a. Tier 1 (default, local model): Extract candidate memories
+   b. Tier 2 (rare, escalation model): Only if conflicts detected,
+      repeated failures across episodes, or unclear resolution
+   c. Dedup against existing memories:
       - If similarity(existing, candidate) > 0.9 → reinforce existing (bump confidence, add evidence)
       - If contradicting → create conflict record, apply auto-resolution rules (§8.3.1)
       - If novel AND evidence threshold met → create new memory
-   c. Enforce per-episode limit: max 5 new memories per cluster
-4. Enforce daily limit: max N memories per day (configurable, default 50)
-5. Update memory confidence scores
-6. Update access tracking on all memories surfaced during reflection
-7. Mark events as reflected
+   d. Enforce per-episode limit: max 5 new memories per cluster
+6. Enforce daily limit: max N memories per day (configurable, default 50)
+7. Tag all new memories with reflection_run_id
+8. Update memory confidence scores
+9. Update access tracking on all memories surfaced during reflection
+10. Mark events as reflected
+11. Log reflection run metadata (run_id, clusters processed, memories created, tokens used)
 ```
 
 ### 5.4 Evidence Thresholds
@@ -558,47 +630,176 @@ Most conflicts can be resolved without human intervention using the `source_auth
 
 Auto-resolution is logged in the `conflicts` table with `resolution = 'auto: [rule applied]'`.
 
+### 8.4 Memory Garbage Collection (Lifecycle)
+
+GC is a deterministic state machine, not a policy. Every memory follows: `active → stale → archived`.
+
+#### 8.4.1 State Transitions
+
+**Case 1: Never used**
+```
+access_count = 0 AND age > 90 days → stale
+stale for 30 days (no retrieval) → archived
+```
+
+**Case 2: Used but abandoned**
+```
+last_accessed > 180 days ago → stale
+stale for 60 days (no retrieval) → archived
+```
+
+**Case 3: Reinforced but never retrieved**
+
+A memory that keeps getting new evidence but is never actually retrieved is *true but irrelevant*.
+```
+evidence_count growing AND access_count < 3 over 90 days → reduce confidence gradually
+  confidence *= 0.95 per 30-day cycle (not archived, just deprioritized)
+```
+
+#### 8.4.2 Safety Rules (Never Auto-Archive)
+
+Some memories must survive indefinitely unless explicitly superseded:
+
+| Condition | Rule |
+|-----------|------|
+| `source_authority >= 2` | Never auto-archive (user preferences, verified outcomes) |
+| `evidence_count >= 5` | Never auto-archive (well-supported) |
+| `memory_type = 'preference'` | Never auto-archive (user prefs live forever) |
+| `memory_type = 'decision'` AND `confidence > 0.7` | Never auto-archive |
+
+These can only be removed via explicit supersession or user instruction.
+
+#### 8.4.3 What "Archive" Means
+
+Archiving is **not** a status flag change. It's a cold-tier transition:
+
+```sql
+-- 1. Move to archived status
+UPDATE memories SET status = 'archived', updated_at = datetime('now')
+WHERE id IN (...);
+
+-- 2. Remove from search index (embeddings)
+DELETE FROM memory_embeddings WHERE memory_id IN (...);
+
+-- 3. Memory row stays in DB (never deleted)
+```
+
+Archived memories:
+- **NOT returned** in normal fast-path or slow-path queries
+- **Only returned** if: explicit historical query, debugging memory system, or `include_archived=true` flag
+- Remain in DB for audit trail and potential resurrection
+
+#### 8.4.4 Resurrection
+
+If an archived memory becomes relevant again (e.g., slow-path historical query surfaces it and it's useful):
+
+```sql
+UPDATE memories SET status = 'active', last_accessed = datetime('now')
+WHERE id = ?;
+-- Re-generate embedding
+INSERT INTO memory_embeddings (memory_id, embedding) VALUES (?, ?);
+```
+
+#### 8.4.5 GC Schedule
+
+GC runs daily alongside the existing condenser. The full check:
+
+```
+1. Identify stale candidates (Case 1 + Case 2 conditions)
+2. Apply safety rules — exclude protected memories
+3. Transition qualifying active → stale
+4. Transition qualifying stale → archived (with embedding cleanup)
+5. Apply Case 3 confidence reduction
+6. Log all transitions for audit
+```
+
+#### 8.4.6 Importance Decay from Access
+
+In addition to confidence decay (§5.5), memories have access-based importance decay:
+
+```
+importance(t) = base_importance * (0.5 ^ (days_since_last_accessed / access_half_life))
+```
+
+- `access_half_life` = 120 days (memories unused for 4 months are half as important)
+- This affects **search ranking only**, not GC transitions
+- Memories with high `access_count` get a log-scaled floor: `max(importance(t), 0.1 * log2(access_count + 1))`
+
+This ensures unused memory drops in search ranking before it hits the GC threshold.
+
 ## 9. Implementation Plan
 
-### Phase 1: Event Recording (Foundation)
+### Phase 1: Schema + Event Recording
 
-**Goal:** Start capturing structured events without changing any existing behavior.
+**Goal:** Get data flowing into structured tables.
 
-1. Add `events` table to memory.db schema
-2. Create `EventRecorder` service in lobs-core
-3. Hook into agent runner to record events automatically
-4. Add event recording alongside existing `memory_write` flat file writes
-5. Index events in the existing search pipeline (new collection: `events`)
+1. Create all tables: `events` (with `signal_score`), `memories` (with access tracking + `reflection_run_id`), `memory_embeddings`, `evidence`, `conflicts`, `reflection_runs`, `retrieval_log`
+2. Create `EventRecorder` service — hook into agent runner
+3. Implement signal classification at ingestion
+4. Keep flat file writes working alongside (backward compatible)
 
-**Backward compatibility:** 100%. Flat files still work. Grep fallback still works. This is purely additive.
+**No new behavior visible.** Just starts recording structured events.
 
-### Phase 2: Structured Memories + Reflection
+### Phase 2: Extraction + Reconciliation
 
-**Goal:** Derive structured memories from events.
+**Goal:** Create structured memories from events.
 
-1. Add `memories`, `evidence`, `conflicts` tables
-2. Implement reflection pipeline (runs after session end + daily)
-3. Update `memory_write` tool to support structured memory creation
-4. Add memory search to the search pipeline (query memories table alongside documents)
-5. Update context engine to include structured memories
+1. Implement memory extraction (simple, strict — local model only)
+2. Key-based reconciliation: dedup against existing memories (0.9 similarity threshold)
+3. Evidence linking: connect memories to supporting events
+4. `memory_write` tool gains structured mode (`permanent: true` → DB row)
 
-### Phase 3: Agent Scoping + Promotion
+**Critical quality gate:** Extraction quality determines system quality. Get this right before moving on.
 
-**Goal:** Proper multi-agent memory isolation and promotion.
+### Phase 3: Fast-Path Query
 
-1. Add scope filtering to memory search
-2. Implement promotion logic in the agent runner
-3. Surface conflicts in agent context
-4. Add CLI commands for memory management (`lobs memory list`, `lobs memory promote`, `lobs memory conflicts`)
+**Goal:** Memories are searchable.
 
-### Phase 4: Flat File Deprecation
+1. FTS5 on `memories.content` (fast path only, no reranker yet)
+2. Access tracking middleware: update `last_accessed` + `access_count` on every retrieval
+3. Retrieval logging (optional, `retrieval_log` table)
+4. Context engine integration: structured memory formatting in agent context
+5. Scope filtering: system/agent/session visibility rules
 
-**Goal:** DB becomes source of truth.
+### Phase 4: Session-End Reflection
 
-1. Generate flat files from DB (for human readability / git tracking)
-2. Migrate condenser to operate on DB
-3. Remove flat file write path from `memory_write`
-4. Keep flat file generation as a view layer
+**Goal:** Automated memory creation.
+
+1. Reflection pipeline runs on session end only (not daily yet)
+2. Skip conditions enforced (§5.1)
+3. Deterministic clustering (§5.2)
+4. Tier 1 only (local model)
+5. Budget enforcement (per-episode + daily limits)
+6. `reflection_runs` table populated for traceability
+
+### Phase 5: GC + Lifecycle
+
+**Goal:** Memory doesn't grow unbounded.
+
+1. GC state machine: active → stale → archived (§8.4)
+2. Safety rules enforced (never auto-archive protected memories)
+3. Embedding cleanup on archive
+4. Importance decay from access (§8.4.6)
+5. Daily GC runs alongside condenser
+
+### Phase 6: Full Pipeline + Deprecation
+
+**Goal:** Slow-path search, daily reflection, flat file deprecation.
+
+1. Slow-path: full BM25 + vector + reranking pipeline on memories
+2. Daily reflection (condensation replacement)
+3. Conflict resolution: auto-resolution rules + escalation
+4. Agent memory promotion logic
+5. Generate flat files from DB (read-only view layer)
+6. CLI: `lobs memory list`, `lobs memory promote`, `lobs memory conflicts`
+
+### Explicitly Deferred
+
+**Do NOT build yet:**
+- Entity relationship graph
+- Complex LLM-based clustering
+- Full conflict resolution UI
+- Cross-room memory sharing
 
 ## 10. Configuration
 
@@ -638,26 +839,25 @@ Extends the existing memory config (`~/.lobs/config/memory.json`):
       "decision": 365,
       "pattern": 90,
       "preference": 365
-    }
-  },
-  "reflection": {
+    },
     "limits": {
       "maxPerEpisode": 5,
       "maxPerDay": 50,
-      "dedupThreshold": 0.9
-    }
-  },
-  "search": {
-    "fastPath": {
-      "enabled": true,
-      "maxLatencyMs": 200
+      "dedupThreshold": 0.9,
+      "maxTokensPerSession": 4000,
+      "maxCandidatesPerCluster": 5,
+      "maxDailyRuns": 50
     },
-    "slowPathTriggers": [
-      "lowConfidence",
-      "fewResults",
-      "researchTask",
-      "explicitRequest"
-    ]
+    "skipConditions": {
+      "minEventsForReflection": 10,
+      "requiresHighSignal": true
+    },
+    "tiers": {
+      "default": "local",
+      "localModel": "qwen2.5-1.5b-instruct-mlx",
+      "escalationModel": "anthropic/claude-sonnet",
+      "escalationTriggers": ["conflict", "repeated_failures", "unclear_resolution"]
+    }
   },
   "collections": [
     { "name": "workspace", "path": "~/.lobs/agents", "pattern": "**/*.md" },
@@ -671,9 +871,7 @@ Extends the existing memory config (`~/.lobs/config/memory.json`):
 
 1. ~~**Event volume.**~~ *Resolved:* Signal scoring at ingestion (§7.1). All events stored, only high-signal events indexed for search.
 
-2. **Reflection LLM cost.** The reflection pipeline needs an LLM to extract memories from event clusters. Running this after every session could be expensive.
-
-   *Proposed:* Use the local qwen2.5-1.5b-instruct for reflection. It's free (LMStudio), fast, and good enough for pattern extraction. Clustering is deterministic (§5.2) — the LLM only handles memory extraction from pre-clustered events. Only escalate to a larger model for conflict resolution.
+2. ~~**Reflection LLM cost.**~~ *Resolved:* Two-tier reflection (§5.3) with budget controls (§5.1). Tier 1 uses local qwen2.5-1.5b (free). Tier 2 escalates to stronger model only for conflicts/repeated failures. Hard limits: 4k tokens/session, 50 runs/day, skip conditions prevent reflecting on low-value sessions.
 
 3. **Embedding storage overhead.** Each memory gets a vector embedding stored in `memory_embeddings`.
 
@@ -683,9 +881,7 @@ Extends the existing memory config (`~/.lobs/config/memory.json`):
 
    *Proposed:* SQLite's WAL mode handles concurrent reads well but serializes writes. For the expected concurrency (2-4 agents max), this is fine. If it becomes a bottleneck, batch writes through a queue.
 
-5. **Dead memory garbage collection.** With `last_accessed` and `access_count` tracking, we can now detect dead memories (never accessed, or not accessed in months). What's the GC policy?
-
-   *Proposed:* Memories with `access_count = 0` and `derived_at > 90 days ago` → auto-archive. Memories with `last_accessed > 180 days ago` → flag for review. Never delete — archive only.
+5. ~~**Dead memory garbage collection.**~~ *Resolved:* Full GC lifecycle defined in §8.4 — deterministic state machine (active → stale → archived), safety rules for high-authority memories, cold tier with embedding cleanup.
 
 ## 12. Success Metrics
 
