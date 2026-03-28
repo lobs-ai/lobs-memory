@@ -29,8 +29,8 @@
         },
         {
             "name": "sessions",
-            "path": "~/.lobs/agents/main/sessions",
-            "pattern": "*.jsonl"
+            "path": "~/.lobs/agents",
+            "pattern": "*/sessions/*.md"
         },
         {
             "name": "lobs-core",
