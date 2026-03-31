@@ -4,7 +4,7 @@
 **Release Date:** 2026-03-13
 
 ### Overview
-Semantic memory server for OpenClaw agents with hybrid search and neural reranking.
+Semantic memory server for AI agents with hybrid search and neural reranking.
 
 ### Key Features
 - **Hybrid Search** — BM25 keyword search combined with dense vector embeddings (Qwen3 4B)
