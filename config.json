@@ -8,6 +8,7 @@
     "reranker": {
         "mode": "none"
     },
+<<<<<<< Updated upstream
     "collections": [
         {
             "name": "agent-memory",
@@ -319,6 +320,12 @@
             "enabled": false,
             "strongSignalThreshold": 0.8
         }
+=======
+    {
+      "name": "sessions",
+      "path": "~/.lobs/agents",
+      "pattern": "*/sessions/*.md"
+>>>>>>> Stashed changes
     },
     "chunking": {
         "targetTokens": 300,
