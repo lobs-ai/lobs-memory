@@ -9,7 +9,7 @@ import { loadConfig } from "./config.js";
 import { initDb, getIndexStats, getDetailedStats, closeDb, queryGraph, getDb } from "./db.js";
 import { initEmbedder, checkEmbedderHealth } from "./embedder.js";
 import { initReranker, isRerankerAvailable, shutdownReranker } from "./reranker.js";
-import { initSearch, search } from "./search.js";
+import { initSearch, search, isExpanderEnabled } from "./search.js";
 import { startIndexer, stopIndexer, getIndexerStatus, reindexAll } from "./indexer.js";
 import { extractSnippet } from "./chunker.js";
 import { readFileSync } from "fs";
@@ -83,8 +83,8 @@ async function startup() {
                 mode: config.reranker?.mode || "none",
               },
               queryExpansion: {
-                loaded: false,
-                path: "not implemented",
+                loaded: isExpanderEnabled(),
+                path: "query-expansion",
               },
             },
             index: stats,

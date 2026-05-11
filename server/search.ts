@@ -614,3 +614,6 @@ export function clearFileCache(path?: string): void {
   if (path) fileCache.delete(path);
   else fileCache.clear();
 }
+
+// Re-export expander status for health endpoint
+export { isExpanderEnabled } from "./expander.js";

@@ -24,6 +24,10 @@ export function initExpander(cfg: Config): void {
   config = cfg;
 }
 
+export function isExpanderEnabled(): boolean {
+  return config?.search?.queryExpansion?.enabled ?? false;
+}
+
 /**
  * Expand a query into typed variants for multi-query search.
  * 
