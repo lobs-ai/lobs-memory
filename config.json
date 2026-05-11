@@ -207,7 +207,7 @@
         "mmr": {"enabled": true, "lambda": 0.7},
         "temporalDecay": {"enabled": true, "halfLifeDays": 30},
         "reranking": {"enabled": true, "candidateCount": 20},
-        "queryExpansion": {"enabled": false, "strongSignalThreshold": 0.8}
+        "queryExpansion": {"enabled": true, "strongSignalThreshold": 0.8}
     },
     "chunking": {
         "targetTokens": 300,
