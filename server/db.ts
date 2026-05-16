@@ -159,7 +159,80 @@ function createTables(db: Database): void {
   db.exec(`CREATE INDEX IF NOT EXISTS idx_graph_entity2 ON graph_edges(entity2)`);
   db.exec(`CREATE INDEX IF NOT EXISTS idx_graph_relation ON graph_edges(relation)`);
 
+  // Migration: add staleness columns if missing
+  {
+    const cols = db.query("PRAGMA table_info(documents)").all() as { name: string }[];
+    const colNames = new Set(cols.map((c) => c.name));
+    if (!colNames.has("last_accessed")) {
+      db.exec("ALTER TABLE documents ADD COLUMN last_accessed TEXT DEFAULT (datetime('now'))");
+    }
+    if (!colNames.has("archived_at")) {
+      db.exec("ALTER TABLE documents ADD COLUMN archived_at TEXT");
+    }
+  }
+
   console.log("Database tables initialized");
+}
+
+// Staleness tracking — run on every search to update last_accessed
+export function touchDocuments(docIds: number[]): void {
+  if (docIds.length === 0) return;
+  const now = new Date().toISOString().replace("T", " ").slice(0, 19);
+  const placeholders = docIds.map(() => "?").join(",");
+  db!.prepare(`
+    UPDATE documents
+       SET last_accessed = ?
+     WHERE id IN (${placeholders})
+       AND archived_at IS NULL
+  `).run(now, ...docIds);
+}
+
+// Staleness archival — mark docs as archived (soft-delete)
+export function archiveDocuments(docIds: number[]): void {
+  if (docIds.length === 0) return;
+  const now = new Date().toISOString().replace("T", " ").slice(0, 19);
+  const placeholders = docIds.map(() => "?").join(",");
+  db!.prepare(`
+    UPDATE documents
+       SET archived_at = ?
+     WHERE id IN (${placeholders})
+       AND archived_at IS NULL
+  `).run(now, ...docIds);
+}
+
+// Get count of stale documents
+export function getStaleDocCount(thresholdDays: number): number {
+  const cutoff = new Date();
+  cutoff.setDate(cutoff.getDate() - thresholdDays);
+  const cutoffStr = cutoff.toISOString().replace("T", " ").slice(0, 19);
+  const row = db!.prepare(`
+    SELECT COUNT(*) as c FROM documents
+     WHERE archived_at IS NULL
+       AND (last_accessed < ? OR last_accessed IS NULL)
+       AND updated_at < ?
+  `).get(cutoffStr, cutoffStr) as { c: number };
+  return row.c;
+}
+
+// Get count of archived docs ready for hard-delete
+export function getHardDeleteCount(hardDeleteAfterDays: number): number {
+  if (hardDeleteAfterDays <= 0) return 0;
+  const cutoff = new Date();
+  cutoff.setDate(cutoff.getDate() - hardDeleteAfterDays);
+  const cutoffStr = cutoff.toISOString().replace("T", " ").slice(0, 19);
+  const row = db!.prepare(`
+    SELECT COUNT(*) as c FROM documents
+     WHERE archived_at IS NOT NULL AND archived_at < ?
+  `).get(cutoffStr) as { c: number };
+  return row.c;
+}
+
+// Doc stats for staleness reporting
+export function getDocStats(): { total: number; active: number; archived: number } {
+  const total = (db!.query("SELECT COUNT(*) as c FROM documents").get() as { c: number }).c;
+  const active = (db!.prepare("SELECT COUNT(*) as c FROM documents WHERE archived_at IS NULL").get() as { c: number }).c;
+  const archived = (db!.prepare("SELECT COUNT(*) as c FROM documents WHERE archived_at IS NOT NULL").get() as { c: number }).c;
+  return { total, active, archived };
 }
 
 // Document operations

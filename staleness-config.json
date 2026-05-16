@@ -1,0 +1,29 @@
+{
+  "$schema": "https://docs.lobs.ai/staleness-config",
+  "description": "Staleness/TTL policy configuration for lobs-memory",
+  "staleness": {
+    "thresholdDays": 30,
+    "description": "Docs not accessed or referenced in any query for this many days are marked stale"
+  },
+  "archive": {
+    "enabled": true,
+    "description": "Soft-delete (archive) instead of hard-delete. Archived docs can be restored."
+  },
+  "hardDeleteAfterDays": 90,
+  "description": "After archiving, permanently delete after this many additional days (0 = never)"
+  },
+  "tracking": {
+    "mode": "query",
+    "description": "'query' = track when docs appear in search results, 'access' = track file reads"
+  },
+  "collections": {
+    "_comment": "Per-collection overrides. Default applies to all collections.",
+    "default": {
+      "stalenessDays": 30,
+      "archiveEnabled": true,
+      "hardDeleteAfterDays": 90
+    }
+  },
+  "dryRun": false,
+  "description": "Log what would be done without making changes"
+}
