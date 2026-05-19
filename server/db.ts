@@ -164,7 +164,8 @@ function createTables(db: Database): void {
     const cols = db.query("PRAGMA table_info(documents)").all() as { name: string }[];
     const colNames = new Set(cols.map((c) => c.name));
     if (!colNames.has("last_accessed")) {
-      db.exec("ALTER TABLE documents ADD COLUMN last_accessed TEXT DEFAULT (datetime('now'))");
+      db.exec("ALTER TABLE documents ADD COLUMN last_accessed TEXT");
+      // Set initial values for existing rows via touch call on startup
     }
     if (!colNames.has("archived_at")) {
       db.exec("ALTER TABLE documents ADD COLUMN archived_at TEXT");
